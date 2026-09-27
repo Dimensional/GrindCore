@@ -59,6 +59,26 @@ FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_Lz4_v1_10_0_CompressFastCon
     return (compressedSize >= 0) ? compressedSize : SZ_Lz4_v1_10_0_COMPRESSFAIL;
 }
 
+FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_Lz4_v1_10_0_CompressPartial(
+    SZ_Lz4_v1_10_0_Stream* stream,
+    const char* src,
+    char* dst,
+    int* srcSize,
+    int targetSize,
+    int acceleration)
+{
+    if (stream == NULL || stream->internalState == NULL || src == NULL || dst == NULL || srcSize == NULL)
+        return SZ_Lz4_v1_10_0_ERROR;
+    if (*srcSize < 0 || targetSize <= 0)
+        return SZ_Lz4_v1_10_0_ERROR;
+
+    // Uses the stream's LZ4_stream_t as the external state; LZ4 re-initialises it before and after (lz4.c,
+    // LZ4_compress_destSize_extState), so the block is independent and the stream is left reset.
+    int compressedSize = LZ4_compress_destSize_extState(stream->internalState, src, dst, srcSize, targetSize, acceleration);
+
+    return (compressedSize > 0) ? compressedSize : SZ_Lz4_v1_10_0_COMPRESSFAIL;
+}
+
 FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_Lz4_v1_10_0_DecompressSafeContinue(
     SZ_Lz4_v1_10_0_Stream* stream,
     const char* src,

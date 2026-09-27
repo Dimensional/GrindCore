@@ -58,13 +58,19 @@ FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_Lz4_v1_10_0_CompressFastCon
     int dstCapacity, 
     int acceleration);
 
-/* Compresses data using partial output size. */
+/* Compresses as much of src as fits in targetSize bytes of dst (LZ4's "destSize" mode,
+ * LZ4_compress_destSize_extState). *srcSize is in/out: bytes available in src on entry, bytes consumed on return,
+ * so the caller knows where the next block starts. Returns the compressed size (> 0) or a negative error code.
+ * The block is independent (it references no earlier stream data), and the stream is reset afterwards: LZ4
+ * re-initialises the state before and after, so any loaded dictionary or history is dropped.
+ * acceleration <= 1 is LZ4's default; larger is faster with less compression. */
 FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_Lz4_v1_10_0_CompressPartial(
     SZ_Lz4_v1_10_0_Stream* stream,
     const char* src,
     char* dst,
-    int srcSize,
-    int targetSize);
+    int* srcSize,
+    int targetSize,
+    int acceleration);
 
 /* Decompresses data using LZ4's streaming API. */
 FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_Lz4_v1_10_0_DecompressSafeContinue(
