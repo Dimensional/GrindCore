@@ -3220,7 +3220,16 @@ SRes LzmaEnc_LzmaCodeMultiCall(CLzmaEncHandle p, Byte *dest, size_t *destLen, IS
 
   p->multicallMode = !final ? 2 : 3; // encode multicall
 
-  res = LzmaEnc_CodeOneBlock(p, limit, limit); //0=full flush, 1=output flush only 
+  // [audit fix, audit/lzma.md 3.5] CodeOneBlock checks maxPackSize against the range coder's output since RangeEnc_Init.
+  // Upstream re-inits the coder per LZMA2 chunk, so that is per chunk; this solid path never re-inits it, so it was the
+  // whole stream's output, and past `limit` bytes every call stopped after one symbol. Count this call's output only
+  // (rc.processed is otherwise used just for Encode2's progress), then restore the stream total.
+  {
+    const UInt64 streamProcessed = p->rc.processed;
+    p->rc.processed = 0;
+    res = LzmaEnc_CodeOneBlock(p, limit, limit); //0=full flush, 1=output flush only
+    p->rc.processed += streamProcessed;
+  }
 
   *destLen -= outStream.rem;
   *availableBytes = p->matchFinder.GetNumAvailableBytes(p->matchFinderObj);
