@@ -837,25 +837,28 @@ static size_t SeqOutStreamBuf_Write(ISeqOutStreamPtr pp, const void *data, size_
 
 SRes Lzma2Enc_EncodeMultiCallPrepare(CLzma2EncHandle p)
 {
-  if (p->coders != NULL && p->coders[0].enc != NULL)
-    LzmaEnc_Destroy(p->coders[0].enc, p->alloc, p->allocBig);
-
+  // [audit fix, audit/lzma.md 3.3] release what an earlier encode on this handle left, as Lzma2Enc_Destroy does:
+  // every coder's encoder (a multithreaded Encode2 creates one per thread, not just coders[0]), the MtCoder with its
+  // threads, and the output buffers. Setting them to NULL/False without freeing them leaked them.
   {
     unsigned i;
     for (i = 0; i < MTCODER_THREADS_MAX; i++)
     {
+      if (p->coders[i].enc)
+        LzmaEnc_Destroy(p->coders[i].enc, p->alloc, p->allocBig);
       p->coders[i].enc = NULL;
       p->coders[i].propsAreSet = False;
     }
   }
 
-  p->mtCoder_WasConstructed = False;
+  #ifndef Z7_ST
+  if (p->mtCoder_WasConstructed)
   {
-    unsigned i;
-    for (i = 0; i < MTCODER_BLOCKS_MAX; i++)
-      p->outBufs[i] = NULL;
-    p->outBufSize = 0;
+    MtCoder_Destruct(&p->mtCoder);
+    p->mtCoder_WasConstructed = False;
   }
+  Lzma2Enc_FreeOutBufs(p);
+  #endif
 
   // set the instream - nothing else - uses multicall
   p->inStream.vt.Read = LimitedSeqInStream_Read;

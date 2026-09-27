@@ -2354,6 +2354,7 @@ static void LzmaEnc_Construct(CLzmaEnc *p)
   LzmaEnc_InitPriceTables(p->ProbPrices);
   p->litProbs = NULL;
   p->saveState.litProbs = NULL;
+  p->multicallMode = 0; // [audit fix, audit/lzma.md 3.3] was left as leftover heap bytes; 2 makes Encode2 loop forever
 }
 
 CLzmaEncHandle LzmaEnc_Create(ISzAllocPtr alloc)
@@ -2987,6 +2988,7 @@ SRes LzmaEnc_CodeOneMemBlock(CLzmaEncHandle p, BoolInt reInit,
   p->writeEndMark = False;
   p->finished = False;
   p->result = SZ_OK;
+  p->multicallMode = 0; // [audit fix, audit/lzma.md 3.3] not a multi-call encode
 
   if (reInit)
     LzmaEnc_Init(p);
@@ -3049,6 +3051,7 @@ SRes LzmaEnc_Encode(CLzmaEncHandle p, ISeqOutStreamPtr outStream, ISeqInStreamPt
     ISzAllocPtr alloc, ISzAllocPtr allocBig)
 {
   // GET_CLzmaEnc_p
+  p->multicallMode = 0; // [audit fix, audit/lzma.md 3.3] not a multi-call encode
   RINOK(LzmaEnc_Prepare(p, outStream, inStream, alloc, allocBig))
   return LzmaEnc_Encode2(p, progress);
 }
@@ -3112,6 +3115,7 @@ SRes LzmaEnc_MemEncode(CLzmaEncHandle p, Byte *dest, SizeT *destLen, const Byte 
 
   p->writeEndMark = writeEndMark;
   p->rc.outStream = &outStream.vt;
+  p->multicallMode = 0; // [audit fix, audit/lzma.md 3.3] not a multi-call encode
 
   res = LzmaEnc_MemPrepare(p, src, srcLen, 0, alloc, allocBig);
   
