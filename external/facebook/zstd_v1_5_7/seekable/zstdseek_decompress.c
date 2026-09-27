@@ -366,7 +366,8 @@ size_t ZSTD_v1_5_7_seekable_getFrameDecompressedSize(const ZSTD_v1_5_7_seekable*
 
 size_t ZSTD_v1_5_7_seekTable_getFrameDecompressedSize(const ZSTD_v1_5_7_seekTable* st, unsigned frameIndex)
 {
-    if (frameIndex > st->tableLen) return ERROR(frameIndex_tooLarge);
+    /* [audit fix, audit/other-codecs.md 4.8.2; as upstream PR #4758] was `>`: frameIndex == tableLen read entries[tableLen + 1] */
+    if (frameIndex >= st->tableLen) return ERROR(frameIndex_tooLarge);
     return st->entries[frameIndex + 1].dOffset -
            st->entries[frameIndex].dOffset;
 }
@@ -397,6 +398,13 @@ static size_t ZSTD_v1_5_7_seekable_loadSeekTable(ZSTD_v1_5_7_seekable* zs)
         U32 const frameSize = tableSize + ZSTD_seekTableFooterSize + ZSTD_SKIPPABLEHEADERSIZE;
 
         U32 remaining = frameSize - ZSTD_seekTableFooterSize; /* don't need to re-read footer */
+
+        /* [audit fix, audit/other-codecs.md 4.8.2; as upstream PRs #4685/#4717] The writer never emits more than
+         * ZSTD_SEEKABLE_MAXFRAMES entries, so a larger count is corrupt. It wraps the U32 tableSize/frameSize above,
+         * possibly onto a real table's size, and would then size and fill a multi-gigabyte entry array (a heap
+         * overflow where size_t is 32-bit). Reject it before those values are used. */
+        if (numFrames > ZSTD_v1_5_7_seekable_MAXFRAMES) return ERROR(corruption_detected);
+
         {   U32 const toRead = MIN(remaining, SEEKABLE_BUFF_SIZE);
             CHECK_IO(src.seek(src.opaque, -(S64)frameSize, SEEK_END));
             CHECK_IO(src.read(src.opaque, zs->inBuff, toRead));
@@ -486,11 +494,52 @@ size_t ZSTD_v1_5_7_seekable_initAdvanced(ZSTD_v1_5_7_seekable* zs, ZSTD_v1_5_7_s
     return 0;
 }
 
+/* [audit fix, audit/other-codecs.md 4.8.2] Called once a frame's last byte (by the seek table) is out, but zstd
+ * hasn't reported the frame's end yet: for a compressed frame that comes on the next call. Without this, a read
+ * ending at a frame's end (every decompressFrame, every read to the end of the file) never checked that frame's
+ * checksum. Any further output means the frame is longer than the seek table says. */
+static size_t ZSTD_v1_5_7_seekable_finishFrame(ZSTD_v1_5_7_seekable* zs, U32 frameIndex)
+{
+    U32 noProgressCount = 0;
+    for (;;) {
+        ZSTD_outBuffer spare = {zs->outBuff, 1, 0};
+        size_t const prevInPos = zs->in.pos;
+        size_t toRead = ZSTD_decompressStream(zs->dstream, &spare, &zs->in);
+        if (ZSTD_isError(toRead)) {
+            return toRead;
+        }
+        if (spare.pos) {
+            return ERROR(corruption_detected);
+        }
+        if (toRead == 0) {
+            if (zs->seekTable.checksumFlag &&
+                (XXH64_digest(&zs->xxhState) & 0xFFFFFFFFU) !=
+                        zs->seekTable.entries[frameIndex].checksum) {
+                return ERROR(corruption_detected);
+            }
+            return 0;
+        }
+        if (zs->in.pos == zs->in.size) {
+            toRead = MIN(toRead, SEEKABLE_BUFF_SIZE);
+            CHECK_IO(zs->src.read(zs->src.opaque, zs->inBuff, toRead));
+            zs->in.size = toRead;
+            zs->in.pos = 0;
+        } else if (zs->in.pos == prevInPos && noProgressCount++ > ZSTD_v1_5_7_seekable_NO_OUTPUT_PROGRESS_MAX) {
+            return ERROR(seekableIO);
+        }
+    }
+}
+
 size_t ZSTD_v1_5_7_seekable_decompress(ZSTD_v1_5_7_seekable* zs, void* dst, size_t len, unsigned long long offset)
 {
     unsigned long long const eos = zs->seekTable.entries[zs->seekTable.tableLen].dOffset;
-    if (offset + len > eos) {
-        len = eos - offset;
+    /* [audit fix, audit/other-codecs.md 4.8.2] Nothing to read at or past the end: there, `eos - offset` wrapped and was
+     * returned as the length read. The clamp is also written so that `offset + len` can't wrap. */
+    if (offset >= eos) {
+        return 0;
+    }
+    if (len > eos - offset) {
+        len = (size_t)(eos - offset);
     }
 
     U32 targetFrame = ZSTD_v1_5_7_seekable_offsetToFrameIndex(zs, offset);
@@ -520,11 +569,13 @@ size_t ZSTD_v1_5_7_seekable_decompress(ZSTD_v1_5_7_seekable* zs, void* dst, size
             size_t prevOutPos;
             size_t prevInPos;
             size_t forwardProgress;
+            /* [audit fix] where this frame ends by the seek table: its output stops there */
+            unsigned long long const frameEnd = zs->seekTable.entries[targetFrame + 1].dOffset;
             if (zs->decompressedOffset < offset) {
                 /* dummy decompressions until we get to the target offset */
                 outTmp = (ZSTD_outBuffer){zs->outBuff, (size_t) (MIN(SEEKABLE_BUFF_SIZE, offset - zs->decompressedOffset)), 0};
             } else {
-                outTmp = (ZSTD_outBuffer){dst, len, (size_t) (zs->decompressedOffset - offset)};
+                outTmp = (ZSTD_outBuffer){dst, (size_t) (MIN(offset + len, frameEnd) - offset), (size_t) (zs->decompressedOffset - offset)};
             }
 
             prevOutPos = outTmp.pos;
@@ -552,6 +603,13 @@ size_t ZSTD_v1_5_7_seekable_decompress(ZSTD_v1_5_7_seekable* zs, void* dst, size
             if (toRead == 0) {
                 /* frame complete */
 
+                /* [audit fix] a frame that ends before the seek table says is corrupt. Carrying on below picked the
+                 * same frame again and re-decoded it without end from a callback source (a buffer source stopped
+                 * once it had read more than the buffer). */
+                if (zs->decompressedOffset != frameEnd) {
+                    return ERROR(corruption_detected);
+                }
+
                 /* verify checksum */
                 if (zs->seekTable.checksumFlag &&
                     (XXH64_digest(&zs->xxhState) & 0xFFFFFFFFU) !=
@@ -563,6 +621,19 @@ size_t ZSTD_v1_5_7_seekable_decompress(ZSTD_v1_5_7_seekable* zs, void* dst, size
                     /* go back to the start and force a reset of the stream */
                     targetFrame = ZSTD_v1_5_7_seekable_offsetToFrameIndex(zs, zs->decompressedOffset);
                     /* in this case it will fail later with corruption_detected, since last block does not have checksum */
+                    assert(targetFrame != zs->seekTable.tableLen);
+                }
+                break;
+            }
+
+            /* [audit fix] all of the frame's data is out, but zstd reports a compressed frame's end on the next call */
+            if (zs->decompressedOffset == frameEnd) {
+                size_t const finished = ZSTD_v1_5_7_seekable_finishFrame(zs, targetFrame);
+                if (ZSTD_isError(finished)) {
+                    return finished;
+                }
+                if (zs->decompressedOffset < offset + len) {
+                    targetFrame = ZSTD_v1_5_7_seekable_offsetToFrameIndex(zs, zs->decompressedOffset);
                     assert(targetFrame != zs->seekTable.tableLen);
                 }
                 break;
