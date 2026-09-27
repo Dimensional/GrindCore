@@ -71,7 +71,10 @@ FUNCTIONEXPORT void FUNCTIONCALLINGCONVENCTION SZ_Sha1_InitState(CSha1 *p);
 FUNCTIONEXPORT void FUNCTIONCALLINGCONVENCTION SZ_Sha1_Init(CSha1 *p);
 FUNCTIONEXPORT void FUNCTIONCALLINGCONVENCTION SZ_Sha1_Update(CSha1 *p, const Byte *data, size_t size);
 FUNCTIONEXPORT void FUNCTIONCALLINGCONVENCTION SZ_Sha1_Final(CSha1 *p, Byte *digest);
-FUNCTIONEXPORT void FUNCTIONCALLINGCONVENCTION SZ_Sha1_PrepareBlock(const CSha1 *p, Byte *block, unsigned size);
+/* Pads the final partial block for Sha1_GetBlockDigest. 7-Zip's contract: size is a multiple of 4 and at most 52, and
+ * the context has consumed a whole number of blocks. Returns 0, or -1 (block untouched) if size breaks the contract:
+ * the vendored loop never terminates otherwise and overwrites memory past the block (audit/hashes.md 6.5). */
+FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_Sha1_PrepareBlock(const CSha1 *p, Byte *block, unsigned size);
 FUNCTIONEXPORT void FUNCTIONCALLINGCONVENCTION SZ_Sha1_GetBlockDigest(const CSha1 *p, const Byte *data, Byte *destDigest);
 FUNCTIONEXPORT void FUNCTIONCALLINGCONVENCTION SZ_Sha1Prepare(void);
 
@@ -94,7 +97,10 @@ FUNCTIONEXPORT void FUNCTIONCALLINGCONVENCTION SZ_SHA512_Update(SHA512_CTX *m, c
 FUNCTIONEXPORT void FUNCTIONCALLINGCONVENCTION SZ_SHA512_Final(void *res, SHA512_CTX *m);
 
 // SHA3
-FUNCTIONEXPORT void FUNCTIONCALLINGCONVENCTION SZ_SHA3_Init(SHA3_CTX *m, unsigned bitSize);
+/* bitSize must be 224, 256, 384 or 512. Returns 0, or -1 for any other value: the vendored SHA3_Init accepts anything,
+ * and above 800 bits the sponge index runs past the state (audit/hashes.md 6.5). On -1 the context is set to a 0-bit
+ * digest, so later Update/Final calls stay in bounds and produce nothing. */
+FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_SHA3_Init(SHA3_CTX *m, unsigned bitSize);
 FUNCTIONEXPORT void FUNCTIONCALLINGCONVENCTION SZ_SHA3_Update(SHA3_CTX *m, const void *v, size_t len);
 FUNCTIONEXPORT void FUNCTIONCALLINGCONVENCTION SZ_SHA3_Final(void *res, SHA3_CTX *m);
 

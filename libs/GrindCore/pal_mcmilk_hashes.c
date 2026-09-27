@@ -1,5 +1,6 @@
 #include <assert.h>
 #include <stdlib.h>
+#include <string.h>
 #include "pal_mcmilk_hashes.h"
 
 /////////////////////////////////////////
@@ -97,7 +98,28 @@ FUNCTIONEXPORT void FUNCTIONCALLINGCONVENCTION SZ_MD2_Init(struct md2 *m) {
 }
 
 FUNCTIONEXPORT void FUNCTIONCALLINGCONVENCTION SZ_MD2_Update(struct md2 *m, const void *v, size_t len) {
-    MD2_Update(m, v, len);
+    // The vendored MD2_Update completes a pending partial block with 16-idx bytes but then advances the input by 16
+    // (md2.c:106), skipping idx bytes and reading up to 15 bytes past the caller's buffer (audit/hashes.md 6.5).
+    // That branch is never entered here: a pending block is completed in a local buffer and handed in as a whole block
+    // (after taking the pending bytes back out of the count), and whole-block input is handled correctly.
+    const unsigned char *p = (const unsigned char *)v;
+    size_t idx = m->len & 0xf;
+    if (idx != 0 && len > 0) {
+        unsigned char block[16];
+        size_t take = 16 - idx;
+        if (len < take) {           // still short of a block: MD2_Update only appends (idx + len < 16)
+            MD2_Update(m, p, len);
+            return;
+        }
+        memcpy(block, m->data, idx);
+        memcpy(block + idx, p, take);
+        m->len -= idx;              // the pending bytes go back in as the start of the whole block
+        MD2_Update(m, block, 16);
+        p += take;
+        len -= take;
+    }
+    if (len > 0)
+        MD2_Update(m, p, len);
 }
 
 FUNCTIONEXPORT void FUNCTIONCALLINGCONVENCTION SZ_MD2_Final(void *res, struct md2 *m) {
@@ -154,8 +176,12 @@ FUNCTIONEXPORT void FUNCTIONCALLINGCONVENCTION SZ_Sha1_Final(CSha1 *p, Byte *dig
     Sha1_Final(p, digest);
 }
 
-FUNCTIONEXPORT void FUNCTIONCALLINGCONVENCTION SZ_Sha1_PrepareBlock(const CSha1 *p, Byte *block, unsigned size) {
+FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_Sha1_PrepareBlock(const CSha1 *p, Byte *block, unsigned size) {
+    // Sha1.c:385-398 pads in 4-byte steps until size == 56: any other size never matches and the loop runs away.
+    if (p == NULL || block == NULL || (size & 3) != 0 || size > 52)
+        return -1;
     Sha1_PrepareBlock(p, block, size);
+    return 0;
 }
 
 FUNCTIONEXPORT void FUNCTIONCALLINGCONVENCTION SZ_Sha1_GetBlockDigest(const CSha1 *p, const Byte *data, Byte *destDigest) {
@@ -222,8 +248,17 @@ FUNCTIONEXPORT void FUNCTIONCALLINGCONVENCTION SZ_SHA512_Final(void *res, SHA512
 
 /////////////////////////////////////////
 // SHA3
-FUNCTIONEXPORT void FUNCTIONCALLINGCONVENCTION SZ_SHA3_Init(SHA3_CTX *m, unsigned bitSize) {
+FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_SHA3_Init(SHA3_CTX *m, unsigned bitSize) {
+    if (m == NULL)
+        return -1;
+    if (bitSize != 224 && bitSize != 256 && bitSize != 384 && bitSize != 512) {
+        // sha3.c:108-113 takes any size; > 800 bits makes the rate negative and the sponge index runs past the state.
+        // A 0-bit context keeps later Update/Final in bounds (full-width rate, nothing copied out).
+        SHA3_Init(m, 0);
+        return -1;
+    }
     SHA3_Init(m, bitSize);
+    return 0;
 }
 
 FUNCTIONEXPORT void FUNCTIONCALLINGCONVENCTION SZ_SHA3_Update(SHA3_CTX *m, const void *v, size_t len) {
