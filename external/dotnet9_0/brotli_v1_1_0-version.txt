@@ -4,3 +4,6 @@ https://github.com/google/brotli/releases/tag/v1.1.0
 Copy the c/dec, c/enc, c/common, and c/include folders into the root and remove all other files.
 
 Apply https://github.com/google/brotli/commit/85d88cbfc2b742e0742286ec277b73bdbf7be433.patch
+
+GrindCore (audit/native-fixes): brotli_v1_1_0.cmake defines BROTLI_ENCODER_CLEANUP_ON_OOM, and enc/encode.c adds
+the out-of-memory checks that mode lacked (each marked [audit fix, audit/other-codecs.md 4.3.1]).

@@ -47,3 +47,8 @@ target_include_directories(brotli_v1_1_0 PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 # Add compiler options to suppress fall-through warnings
 target_compile_options(brotli_v1_1_0 PRIVATE $<$<COMPILE_LANG_AND_ID:C,Clang,AppleClang>:-Wno-implicit-fallthrough>
 )
+
+# A failed encoder allocation returns BROTLI_FALSE instead of calling exit(EXIT_FAILURE), Brotli's default
+# (enc/memory.h), which would end the host process (audit/other-codecs.md 4.3.1). It only affects the encoder, whose
+# files all include enc/memory.h and are all in this target; the decoder always reports allocation failures.
+target_compile_definitions(brotli_v1_1_0 PRIVATE BROTLI_ENCODER_CLEANUP_ON_OOM)

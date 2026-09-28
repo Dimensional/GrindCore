@@ -259,7 +259,7 @@ FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_Lz4F_v1_10_0_CompressHC_Str
 {
     // Not supported (audit/other-codecs.md 4.1.1). This used the LZ4F context's LZ4F_cctx, a couple of hundred bytes, as
     // an LZ4_streamHC_t (LZ4_STREAMHC_MINSIZE, 262200 bytes), resetting and compressing into it: heap corruption. An
-    // LZ4F context has no HC stream of its own; HC frames come from the LZ4F functions with compressionLevel >= 3.
+    // LZ4F context has no HC stream of its own; HC frames come from the LZ4F functions with compressionLevel >= LZ4HC_CLEVEL_MIN (2).
     (void)ctx; (void)dstBuffer; (void)dstCapacity; (void)srcBuffer; (void)srcSize; (void)compressionLevel; (void)cOptPtr;
     return SZ_Lz4_v1_10_0_ERROR;
 }

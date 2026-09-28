@@ -1587,6 +1587,8 @@ BROTLI_BOOL BrotliEncoderCompressStream(
     const uint8_t** next_in, size_t* available_out, uint8_t** next_out,
     size_t* total_out) {
   if (!EnsureInitialized(s)) return BROTLI_FALSE;
+  /* [audit fix, audit/other-codecs.md 4.3.1] An encoder that ran out of memory stays failed (the flag never clears). */
+  if (BROTLI_IS_OOM(&s->memory_manager_)) return BROTLI_FALSE;
 
   /* Unfinished metadata block; check requirements. */
   if (s->remaining_metadata_bytes_ != BROTLI_UINT32_MAX) {
@@ -1596,8 +1598,10 @@ BROTLI_BOOL BrotliEncoderCompressStream(
 
   if (op == BROTLI_OPERATION_EMIT_METADATA) {
     UpdateSizeHint(s, 0);  /* First data metablock might be emitted here. */
-    return ProcessMetadata(
-        s, available_in, next_in, available_out, next_out, total_out);
+    /* [audit fix, audit/other-codecs.md 4.3.1] no success after a failed allocation (see the end of this function) */
+    return TO_BROTLI_BOOL(ProcessMetadata(
+        s, available_in, next_in, available_out, next_out, total_out) &&
+        !BROTLI_IS_OOM(&s->memory_manager_));
   }
 
   if (s->stream_state_ == BROTLI_STREAM_METADATA_HEAD ||
@@ -1610,8 +1614,9 @@ BROTLI_BOOL BrotliEncoderCompressStream(
   }
   if (s->params.quality == FAST_ONE_PASS_COMPRESSION_QUALITY ||
       s->params.quality == FAST_TWO_PASS_COMPRESSION_QUALITY) {
-    return BrotliEncoderCompressStreamFast(s, op, available_in, next_in,
-        available_out, next_out, total_out);
+    /* [audit fix, audit/other-codecs.md 4.3.1] no success after a failed allocation (see the end of this function) */
+    return TO_BROTLI_BOOL(BrotliEncoderCompressStreamFast(s, op, available_in, next_in,
+        available_out, next_out, total_out) && !BROTLI_IS_OOM(&s->memory_manager_));
   }
   while (BROTLI_TRUE) {
     size_t remaining_block_size = RemainingInputBlockSize(s);
@@ -1624,6 +1629,10 @@ BROTLI_BOOL BrotliEncoderCompressStream(
       size_t copy_input_size =
           BROTLI_MIN(size_t, remaining_block_size, *available_in);
       CopyInputToRingBuffer(s, copy_input_size, *next_in);
+      /* [audit fix, audit/other-codecs.md 4.3.1] With BROTLI_ENCODER_CLEANUP_ON_OOM, a failed ring buffer allocation
+         left the input uncopied but counted as consumed; with nothing else to allocate, FINISH then wrote an empty
+         stream and reported success. Fail instead, input untouched. */
+      if (BROTLI_IS_OOM(&s->memory_manager_)) return BROTLI_FALSE;
       *next_in += copy_input_size;
       *available_in -= copy_input_size;
       s->total_in_ += copy_input_size;
@@ -1669,6 +1678,9 @@ BROTLI_BOOL BrotliEncoderCompressStream(
     break;
   }
   CheckFlushComplete(s);
+  /* [audit fix, audit/other-codecs.md 4.3.1] The out-of-memory flag is sticky: never report success after a failed
+     allocation, whichever call site missed it. */
+  if (BROTLI_IS_OOM(&s->memory_manager_)) return BROTLI_FALSE;
   return BROTLI_TRUE;
 }
 

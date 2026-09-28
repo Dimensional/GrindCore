@@ -161,7 +161,7 @@ typedef struct {
 } SZ_Lz4F_v1_10_0_DecompressionContext;
 
 /* Not supported: always returns SZ_Lz4_v1_10_0_ERROR. It used the LZ4F context as an HC stream and corrupted the
-   heap; HC frames come from the LZ4F functions with compressionLevel >= 3. */
+   heap; HC frames come from the LZ4F functions with compressionLevel >= LZ4HC_CLEVEL_MIN (2). */
 FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_Lz4F_v1_10_0_CompressHC_Stream(
     SZ_Lz4F_v1_10_0_CompressionContext* ctx,
     void* dstBuffer, size_t dstCapacity,
