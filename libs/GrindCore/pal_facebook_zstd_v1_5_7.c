@@ -2,6 +2,13 @@
 #include <stdlib.h>
 #include <stdint.h>
 
+// Argument checks for the size_t functions (audit/zstd.md 2.2). A bad argument returns SZ_ZSTD_ARG_ERROR, zstd's
+// generic error, which IsError recognises. It never returns 0: that's a valid decoded size, and from DecompressStream
+// it means the frame is complete. A NULL buffer is only bad with a nonzero size. With size 0 it goes to zstd, whose
+// API allows it, so an empty array (which .NET pins as NULL) behaves like any other empty buffer.
+#define SZ_ZSTD_ARG_ERROR ((size_t)-1)
+#define SZ_ZSTD_NULL_BUF(p, n) (!(p) && (n) != 0)
+
 //
 // ===== Compression Context Management =====
 //
@@ -77,12 +84,12 @@ FUNCTIONEXPORT void FUNCTIONCALLINGCONVENCTION SZ_ZStd_v1_5_7_FreeDecompressionD
 // ===== Block Compression & Decompression =====
 //
 FUNCTIONEXPORT size_t FUNCTIONCALLINGCONVENCTION SZ_ZStd_v1_5_7_CompressBlock(SZ_ZStd_v1_5_7_CompressionContext* ctx, void* dst, size_t dstCapacity, const void* src, size_t srcSize, int32_t compressionLevel) {
-    if (!ctx || !ctx->cctx || !dst || !src) return 0;
+    if (!ctx || !ctx->cctx || SZ_ZSTD_NULL_BUF(dst, dstCapacity) || SZ_ZSTD_NULL_BUF(src, srcSize)) return SZ_ZSTD_ARG_ERROR;
     return ZSTD_compressCCtx(ctx->cctx, dst, dstCapacity, src, srcSize, compressionLevel);
 }
 
 FUNCTIONEXPORT size_t FUNCTIONCALLINGCONVENCTION SZ_ZStd_v1_5_7_DecompressBlock(SZ_ZStd_v1_5_7_DecompressionContext* ctx, void* dst, size_t dstCapacity, const void* src, size_t srcSize) {
-    if (!ctx || !ctx->dctx || !dst || !src) return 0;
+    if (!ctx || !ctx->dctx || SZ_ZSTD_NULL_BUF(dst, dstCapacity) || SZ_ZSTD_NULL_BUF(src, srcSize)) return SZ_ZSTD_ARG_ERROR;
     return ZSTD_decompressDCtx(ctx->dctx, dst, dstCapacity, src, srcSize);
 }
 
@@ -96,15 +103,16 @@ static size_t compressStream_152(
     int64_t* inSize, int64_t* outSize,
     ZSTD_EndDirective endOp)
 {
-    if (!ctx || !ctx->cctx || !dst || !src || !outSize) return -1;
-    if (endOp == ZSTD_e_continue && !inSize) return -1;
+    if (!ctx || !ctx->cctx || SZ_ZSTD_NULL_BUF(dst, dstCapacity) || SZ_ZSTD_NULL_BUF(src, srcCapacity) || !outSize)
+        return SZ_ZSTD_ARG_ERROR;
+    if (endOp == ZSTD_e_continue && !inSize) return SZ_ZSTD_ARG_ERROR;
 
     ZSTD_outBuffer output = { dst, dstCapacity, 0 };
     ZSTD_inBuffer input = { src, srcCapacity, 0 };
 
     size_t toFlush = ZSTD_compressStream2(ctx->cctx, &output, &input, endOp);
 
-    *inSize = input.pos;
+    if (inSize) *inSize = input.pos; // optional for FlushStream and EndStream
     *outSize = output.pos;
 
     return toFlush; // Bytes left in buffer
@@ -135,7 +143,8 @@ FUNCTIONEXPORT size_t FUNCTIONCALLINGCONVENCTION SZ_ZStd_v1_5_7_EndStream(
 // ===== Streaming Decompression =====
 //
 FUNCTIONEXPORT size_t FUNCTIONCALLINGCONVENCTION SZ_ZStd_v1_5_7_DecompressStream(SZ_ZStd_v1_5_7_DecompressionContext* ctx, void* dst, size_t dstCapacity, const void* src, size_t srcCapacity, int64_t* inSize, int64_t* outSize) {
-    if (!ctx || !ctx->dctx || !dst || !src) return 0;
+    if (!ctx || !ctx->dctx || SZ_ZSTD_NULL_BUF(dst, dstCapacity) || SZ_ZSTD_NULL_BUF(src, srcCapacity) || !inSize || !outSize)
+        return SZ_ZSTD_ARG_ERROR;
 
     ZSTD_outBuffer output = { dst, dstCapacity, 0 };
     ZSTD_inBuffer input = { src, srcCapacity, 0 };
@@ -178,12 +187,14 @@ FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_ZStd_v1_5_7_SetJobSize(SZ_Z
 // ===== Dictionary Compression & Decompression =====
 //
 FUNCTIONEXPORT size_t FUNCTIONCALLINGCONVENCTION SZ_ZStd_v1_5_7_CompressBlockWithDict(SZ_ZStd_v1_5_7_CompressionContext* ctx, SZ_ZStd_v1_5_7_CompressionDict* dict, void* dst, size_t dstCapacity, const void* src, size_t srcSize) {
-    if (!ctx || !ctx->cctx || !dict || !dict->cdict || !dst || !src) return 0;
+    if (!ctx || !ctx->cctx || !dict || !dict->cdict || SZ_ZSTD_NULL_BUF(dst, dstCapacity) || SZ_ZSTD_NULL_BUF(src, srcSize))
+        return SZ_ZSTD_ARG_ERROR;
     return ZSTD_compress_usingCDict(ctx->cctx, dst, dstCapacity, src, srcSize, dict->cdict);
 }
 
 FUNCTIONEXPORT size_t FUNCTIONCALLINGCONVENCTION SZ_ZStd_v1_5_7_DecompressBlockWithDict(SZ_ZStd_v1_5_7_DecompressionContext* ctx, SZ_ZStd_v1_5_7_DecompressionDict* dict, void* dst, size_t dstCapacity, const void* src, size_t srcSize) {
-    if (!ctx || !ctx->dctx || !dict || !dict->ddict || !dst || !src) return 0;
+    if (!ctx || !ctx->dctx || !dict || !dict->ddict || SZ_ZSTD_NULL_BUF(dst, dstCapacity) || SZ_ZSTD_NULL_BUF(src, srcSize))
+        return SZ_ZSTD_ARG_ERROR;
     return ZSTD_decompress_usingDDict(ctx->dctx, dst, dstCapacity, src, srcSize, dict->ddict);
 }
 
