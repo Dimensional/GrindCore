@@ -1,12 +1,31 @@
 #include "pal_lz4_lz4_v1_10_0.h"
+#include <stdlib.h>
+#include <string.h>
+
+// A Stream serves both directions, so its state holds both LZ4 states (audit/other-codecs.md 4.1.1). The compressor's
+// comes first, so internalState is still an LZ4_stream_t* (GetCurrentLZ4Stream, AttachDict, CompressPartial). The
+// decoder used to take that same LZ4_stream_t as its LZ4_streamDecode_t: after compressing or LoadDict, it read
+// hash-table entries as its history pointers.
+typedef struct {
+    LZ4_stream_t encode;
+    LZ4_streamDecode_t decode;
+} SZ_Lz4_v1_10_0_StreamState;
+
+#define SZ_LZ4_ENCODE(stream) (&((SZ_Lz4_v1_10_0_StreamState*)(stream)->internalState)->encode)
+#define SZ_LZ4_DECODE(stream) (&((SZ_Lz4_v1_10_0_StreamState*)(stream)->internalState)->decode)
 
 FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_Lz4_v1_10_0_Init(SZ_Lz4_v1_10_0_Stream* stream)
 {
     if (stream == NULL)
         return SZ_Lz4_v1_10_0_ERROR;
 
-    stream->internalState = (void*)LZ4_createStream();
-    return (stream->internalState != NULL) ? SZ_Lz4_v1_10_0_OK : SZ_Lz4_v1_10_0_MEMERROR;
+    SZ_Lz4_v1_10_0_StreamState* state = (SZ_Lz4_v1_10_0_StreamState*)malloc(sizeof(SZ_Lz4_v1_10_0_StreamState));
+    stream->internalState = state;
+    if (state == NULL)
+        return SZ_Lz4_v1_10_0_MEMERROR;
+    LZ4_initStream(&state->encode, sizeof(state->encode));
+    LZ4_setStreamDecode(&state->decode, NULL, 0);
+    return SZ_Lz4_v1_10_0_OK;
 }
 
 FUNCTIONEXPORT void FUNCTIONCALLINGCONVENCTION SZ_Lz4_v1_10_0_End(SZ_Lz4_v1_10_0_Stream* stream)
@@ -14,7 +33,7 @@ FUNCTIONEXPORT void FUNCTIONCALLINGCONVENCTION SZ_Lz4_v1_10_0_End(SZ_Lz4_v1_10_0
     if (stream == NULL || stream->internalState == NULL)
         return;
 
-    LZ4_freeStream((LZ4_stream_t*)stream->internalState);
+    free(stream->internalState);
     stream->internalState = NULL;
 }
 
@@ -23,7 +42,7 @@ FUNCTIONEXPORT void FUNCTIONCALLINGCONVENCTION SZ_Lz4_v1_10_0_ResetStream(SZ_Lz4
     if (stream == NULL || stream->internalState == NULL)
         return;
 
-    LZ4_resetStream_fast((LZ4_stream_t*)stream->internalState);
+    LZ4_resetStream_fast(SZ_LZ4_ENCODE(stream));
 }
 
 FUNCTIONEXPORT LZ4_stream_t* FUNCTIONCALLINGCONVENCTION SZ_Lz4_v1_10_0_GetCurrentLZ4Stream(SZ_Lz4_v1_10_0_Stream* stream)
@@ -31,15 +50,19 @@ FUNCTIONEXPORT LZ4_stream_t* FUNCTIONCALLINGCONVENCTION SZ_Lz4_v1_10_0_GetCurren
     if (stream == NULL || stream->internalState == NULL)
         return NULL;
 
-    return (LZ4_stream_t*)stream->internalState;
+    return SZ_LZ4_ENCODE(stream);
 }
 
+// Copies the compression state (it used to adopt `from`, which End then freed). `to` is initialised first if needed;
+// the caller keeps `from`. The copy still refers to the same history and dictionary buffers, so they must stay valid.
 FUNCTIONEXPORT void FUNCTIONCALLINGCONVENCTION SZ_Lz4_v1_10_0_TransferStateToPalLZ4Stream(const LZ4_stream_t* from, SZ_Lz4_v1_10_0_Stream* to)
 {
     if (from == NULL || to == NULL)
         return;
+    if (to->internalState == NULL && SZ_Lz4_v1_10_0_Init(to) != SZ_Lz4_v1_10_0_OK)
+        return;
 
-    to->internalState = (void*)from;
+    memcpy(SZ_LZ4_ENCODE(to), from, sizeof(LZ4_stream_t));
 }
 
 FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_Lz4_v1_10_0_CompressFastContinue(
@@ -50,11 +73,10 @@ FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_Lz4_v1_10_0_CompressFastCon
     int dstCapacity,
     int acceleration)
 {
-    if (stream == NULL || src == NULL || dst == NULL)
+    if (stream == NULL || stream->internalState == NULL || src == NULL || dst == NULL)
         return SZ_Lz4_v1_10_0_ERROR;
 
-    LZ4_stream_t* lz4Stream = (LZ4_stream_t*)stream->internalState;
-    int compressedSize = LZ4_compress_fast_continue(lz4Stream, src, dst, srcSize, dstCapacity, acceleration);
+    int compressedSize = LZ4_compress_fast_continue(SZ_LZ4_ENCODE(stream), src, dst, srcSize, dstCapacity, acceleration);
 
     return (compressedSize >= 0) ? compressedSize : SZ_Lz4_v1_10_0_COMPRESSFAIL;
 }
@@ -74,7 +96,7 @@ FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_Lz4_v1_10_0_CompressPartial
 
     // Uses the stream's LZ4_stream_t as the external state; LZ4 re-initialises it before and after (lz4.c,
     // LZ4_compress_destSize_extState), so the block is independent and the stream is left reset.
-    int compressedSize = LZ4_compress_destSize_extState(stream->internalState, src, dst, srcSize, targetSize, acceleration);
+    int compressedSize = LZ4_compress_destSize_extState(SZ_LZ4_ENCODE(stream), src, dst, srcSize, targetSize, acceleration);
 
     return (compressedSize > 0) ? compressedSize : SZ_Lz4_v1_10_0_COMPRESSFAIL;
 }
@@ -86,11 +108,10 @@ FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_Lz4_v1_10_0_DecompressSafeC
     int compressedSize,
     int dstCapacity)
 {
-    if (stream == NULL || src == NULL || dst == NULL)
+    if (stream == NULL || stream->internalState == NULL || src == NULL || dst == NULL)
         return SZ_Lz4_v1_10_0_ERROR;
 
-    LZ4_streamDecode_t* lz4StreamDecode = (LZ4_streamDecode_t*)stream->internalState;
-    int decompressedSize = LZ4_decompress_safe_continue(lz4StreamDecode, src, dst, compressedSize, dstCapacity);
+    int decompressedSize = LZ4_decompress_safe_continue(SZ_LZ4_DECODE(stream), src, dst, compressedSize, dstCapacity);
 
     return (decompressedSize >= 0) ? decompressedSize : SZ_Lz4_v1_10_0_DECOMPRESSFAIL;
 }
@@ -100,11 +121,10 @@ FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_Lz4_v1_10_0_LoadDict(
     const char* dictionary,
     int dictSize)
 {
-    if (stream == NULL || dictionary == NULL || dictSize <= 0)
+    if (stream == NULL || stream->internalState == NULL || dictionary == NULL || dictSize <= 0)
         return SZ_Lz4_v1_10_0_ERROR;
 
-    LZ4_stream_t* lz4Stream = (LZ4_stream_t*)stream->internalState;
-    int result = LZ4_loadDict(lz4Stream, dictionary, dictSize);
+    int result = LZ4_loadDict(SZ_LZ4_ENCODE(stream), dictionary, dictSize);
 
     return (result >= 0) ? SZ_Lz4_v1_10_0_OK : SZ_Lz4_v1_10_0_ERROR;
 }
@@ -114,11 +134,10 @@ FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_Lz4_v1_10_0_SaveDict(
     char* safeBuffer,
     int maxDictSize)
 {
-    if (stream == NULL || safeBuffer == NULL || maxDictSize <= 0)
+    if (stream == NULL || stream->internalState == NULL || safeBuffer == NULL || maxDictSize <= 0)
         return SZ_Lz4_v1_10_0_ERROR;
 
-    LZ4_stream_t* lz4Stream = (LZ4_stream_t*)stream->internalState;
-    int savedSize = LZ4_saveDict(lz4Stream, safeBuffer, maxDictSize);
+    int savedSize = LZ4_saveDict(SZ_LZ4_ENCODE(stream), safeBuffer, maxDictSize);
 
     return (savedSize >= 0) ? savedSize : SZ_Lz4_v1_10_0_ERROR;
 }
@@ -127,13 +146,11 @@ FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_Lz4_v1_10_0_AttachDict(
     SZ_Lz4_v1_10_0_Stream* stream,
     SZ_Lz4_v1_10_0_Stream* dictStream)
 {
-    if (stream == NULL || dictStream == NULL)
+    if (stream == NULL || stream->internalState == NULL || dictStream == NULL)
         return SZ_Lz4_v1_10_0_ERROR;
 
-    LZ4_stream_t* lz4Stream = (LZ4_stream_t*)stream->internalState;
-    LZ4_stream_t* dictLZ4Stream = (LZ4_stream_t*)dictStream->internalState;
-
-    LZ4_attach_dictionary(lz4Stream, dictLZ4Stream);
+    // a dictionary stream without state detaches the dictionary, as LZ4_attach_dictionary(stream, NULL) does
+    LZ4_attach_dictionary(SZ_LZ4_ENCODE(stream), dictStream->internalState ? SZ_LZ4_ENCODE(dictStream) : NULL);
     return SZ_Lz4_v1_10_0_OK;
 }
 
@@ -143,7 +160,7 @@ FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_Lz4_v1_10_0_Flush(SZ_Lz4_v1
         return SZ_Lz4_v1_10_0_ERROR;
 
     // Ensures stream flushing happens (LZ4 does not have an explicit flush function, but resetting achieves similar effect)
-    LZ4_resetStream_fast((LZ4_stream_t*)stream->internalState);
+    LZ4_resetStream_fast(SZ_LZ4_ENCODE(stream));
     return SZ_Lz4_v1_10_0_OK;
 }
 
@@ -160,7 +177,7 @@ FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_Lz4_v1_10_0_DecompressUsing
         return SZ_Lz4_v1_10_0_ERROR;
 
     int decompressedSize = LZ4_decompress_safe_usingDict(src, dst, srcSize, dstCapacity, dictStart, dictSize);
-    return (decompressedSize > 0) ? decompressedSize : SZ_Lz4_v1_10_0_DECOMPRESSFAIL;
+    return (decompressedSize >= 0) ? decompressedSize : SZ_Lz4_v1_10_0_DECOMPRESSFAIL; // 0: a valid empty block
 }
 
 FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_Lz4_v1_10_0_DecompressPartialUsingDict(
@@ -240,23 +257,11 @@ FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_Lz4F_v1_10_0_CompressHC_Str
     int compressionLevel,
     const LZ4F_compressOptions_t* cOptPtr)
 {
-    if (ctx == NULL || ctx->internalState == NULL || dstBuffer == NULL || srcBuffer == NULL) 
-        return SZ_Lz4_v1_10_0_ERROR;
-
-    // Ensure HC streaming context is correctly handled
-    LZ4_streamHC_t* hcStream = (LZ4_streamHC_t*)ctx->internalState;
-    if (hcStream == NULL) 
-        return SZ_Lz4_v1_10_0_ERROR;
-
-    // Reset stream with the requested compression level
-    LZ4_resetStreamHC_fast(hcStream, compressionLevel);
-
-    // Perform HC streaming compression
-    int32_t compressedSize = LZ4_compress_HC_continue(hcStream, srcBuffer, dstBuffer, srcSize, (int)dstCapacity);
-
-    return compressedSize;
-
-    //return (compressedSize > 0) ? compressedSize : SZ_Lz4_v1_10_0_COMPRESSFAIL;
+    // Not supported (audit/other-codecs.md 4.1.1). This used the LZ4F context's LZ4F_cctx, a couple of hundred bytes, as
+    // an LZ4_streamHC_t (LZ4_STREAMHC_MINSIZE, 262200 bytes), resetting and compressing into it: heap corruption. An
+    // LZ4F context has no HC stream of its own; HC frames come from the LZ4F functions with compressionLevel >= 3.
+    (void)ctx; (void)dstBuffer; (void)dstCapacity; (void)srcBuffer; (void)srcSize; (void)compressionLevel; (void)cOptPtr;
+    return SZ_Lz4_v1_10_0_ERROR;
 }
 
 // Returns the upper bound on the size of a compressed frame for a given input size

@@ -43,7 +43,7 @@ FUNCTIONEXPORT void FUNCTIONCALLINGCONVENCTION SZ_Lz4_v1_10_0_End(SZ_Lz4_v1_10_0
 /* Resets the LZ4 stream object for fresh compression cycles. */
 FUNCTIONEXPORT void FUNCTIONCALLINGCONVENCTION SZ_Lz4_v1_10_0_ResetStream(SZ_Lz4_v1_10_0_Stream* stream);
 
-/* Transfers the state from an LZ4 stream object to PAL. */
+/* Copies an LZ4 compression state into the PAL stream (initialising it if needed); the caller keeps `from`. */
 FUNCTIONEXPORT void FUNCTIONCALLINGCONVENCTION SZ_Lz4_v1_10_0_TransferStateToPalLZ4Stream(const LZ4_stream_t* from, SZ_Lz4_v1_10_0_Stream* to);
 
 /* Retrieves the current LZ4 stream object. */
@@ -160,6 +160,8 @@ typedef struct {
     void* internalState;
 } SZ_Lz4F_v1_10_0_DecompressionContext;
 
+/* Not supported: always returns SZ_Lz4_v1_10_0_ERROR. It used the LZ4F context as an HC stream and corrupted the
+   heap; HC frames come from the LZ4F functions with compressionLevel >= 3. */
 FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_Lz4F_v1_10_0_CompressHC_Stream(
     SZ_Lz4F_v1_10_0_CompressionContext* ctx,
     void* dstBuffer, size_t dstCapacity,
