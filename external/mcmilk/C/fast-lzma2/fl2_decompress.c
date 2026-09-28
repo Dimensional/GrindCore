@@ -320,6 +320,10 @@ FL2LIB_API size_t FL2LIB_CALL FL2_decompressDCtx(FL2_DCtx* dctx,
     const BYTE *srcBuf = src;
 
     if (prop == LZMA2_PROP_UNINITIALIZED) {
+        /* [audit fix, audit/other-codecs.md 4.4.1] a 0-byte source has no property byte: reading one and
+         * decrementing srcSize read past the source and decoded what followed it as input (size SIZE_MAX) */
+        if (srcSize == 0)
+            return FL2_ERROR(srcSize_wrong);
         prop = *(const BYTE*)src;
         ++srcBuf;
         --srcSize;
