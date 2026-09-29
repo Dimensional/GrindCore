@@ -186,8 +186,12 @@ int FL2POOL_waitAll(void *ctxVoid, unsigned timeout)
         while ((ctx->numThreadsBusy || ctx->queueIndex < ctx->queueEnd) && !ctx->shutdown)
             FL2_pthread_cond_wait(&ctx->busyCond, &ctx->queueMutex);
     }
+    /* [audit fix, audit/other-codecs.md 4.4.1] a job still queued is not done: counting only the busy threads let a
+     * timed wait report completion before the worker had picked the job up, and the caller then reused the buffers
+     * and state that job was about to work on. Read under the lock. */
+    int const busy = (ctx->numThreadsBusy || ctx->queueIndex < ctx->queueEnd) && !ctx->shutdown;
     FL2_pthread_mutex_unlock(&ctx->queueMutex);
-    return ctx->numThreadsBusy && !ctx->shutdown;
+    return busy;
 }
 
 size_t FL2POOL_threadsBusy(void * ctx)

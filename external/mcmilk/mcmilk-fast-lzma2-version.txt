@@ -9,3 +9,5 @@ GrindCore (audit/native-fixes, audit/other-codecs.md 4.4.1):
   b44b79b9 ("Fix unsafe access to the match table in struct LZMA2_ECtx_s") and a793db99 ("Don't read beyond end
   in RMF_handleRepeat"). Neither changes the compressed output.
 - fl2_decompress.c: FL2_decompressDCtx rejects a 0-byte source (marked [audit fix, audit/other-codecs.md 4.4.1]).
+- fl2_pool.c: FL2POOL_waitAll counts a queued job as busy, so a timed wait no longer reports completion before the
+  job has started (marked [audit fix, audit/other-codecs.md 4.4.1]).
