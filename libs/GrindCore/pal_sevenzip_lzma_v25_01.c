@@ -11,39 +11,55 @@ SRes Lzma2Enc_EncodeMultiCallPrepare(CLzma2EncHandle p);
 SRes Lzma2Enc_EncodeMultiCall(CLzma2EncHandle p, Byte *outBuf, size_t *outBufSize, ISeqInStreamPtr inStream, BoolInt init);
 SRes Lzma2Enc_EncodeMultiCallFinalize(CLzma2EncHandle p, Byte *outBuf, size_t *outBufSize);
 
+// Argument checks (audit/lzma.md 3.6), with the zstd and Brotli PALs' conventions (audit/zstd.md 2.2,
+// audit/other-codecs.md 4.3.1). 7-Zip dereferences its decoder, encoder, length, status and properties pointers without
+// checking them. A bad argument gets SZ_ERROR_PARAM, and nothing is touched; Free/FreeProbs/Destroy/Init/Construct of
+// NULL do nothing. A NULL buffer is only bad with a nonzero size, so an empty array (which .NET pins as NULL) is still
+// an empty buffer. The decode calls also refuse a decoder that was never allocated, or was freed (probs or dic NULL: a
+// read after Dispose reached 7-Zip that way, lzma.md 3.6.1 L11), and a dicLimit past the dictionary.
+#define SZ_LZ_NULL_BUF(p, n) (!(p) && (n) != 0)
+// The multi-call encoders' circular input (BufferInStream_Read): a buffer, and pos/remaining within it.
+#define SZ_LZ_BAD_INSTREAM(s) (!(s) || SZ_LZ_NULL_BUF((s)->buffer, (s)->size) || (s)->pos > (s)->size || (s)->remaining > (s)->size)
+
 /* Constructs the LZMA2 decoder. */
 FUNCTIONEXPORT void FUNCTIONCALLINGCONVENCTION SZ_Lzma2_v25_01_Dec_Construct(CLzma2Dec *p)
 {
+    if (!p) return;
     Lzma2Dec_CONSTRUCT(p);
 }
 
 /* Frees memory for LZMA2 decoder properties. */
 FUNCTIONEXPORT void FUNCTIONCALLINGCONVENCTION SZ_Lzma2_v25_01_Dec_FreeProbs(CLzma2Dec *p)
 {
+    if (!p) return;
     Lzma2Dec_FreeProbs(p, &g_AlignedAlloc);
 }
 
 /* Frees memory for the LZMA2 decoder. */
 FUNCTIONEXPORT void FUNCTIONCALLINGCONVENCTION SZ_Lzma2_v25_01_Dec_Free(CLzma2Dec *p)
 {
+    if (!p) return;
     Lzma2Dec_Free(p, &g_AlignedAlloc);
 }
 
 /* Allocates LZMA2 probabilities. */
 FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_Lzma2_v25_01_Dec_AllocateProbs(CLzma2Dec *p, uint8_t prop)
 {
+    if (!p) return SZ_ERROR_PARAM;
     return Lzma2Dec_AllocateProbs(p, prop, &g_AlignedAlloc);
 }
 
 /* Allocates memory for LZMA2 decoder. */
 FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_Lzma2_v25_01_Dec_Allocate(CLzma2Dec *p, uint8_t prop)
 {
+    if (!p) return SZ_ERROR_PARAM;
     return Lzma2Dec_Allocate(p, prop, &g_AlignedAlloc);
 }
 
 /* Initializes the LZMA2 decoder. */
 FUNCTIONEXPORT void FUNCTIONCALLINGCONVENCTION SZ_Lzma2_v25_01_Dec_Init(CLzma2Dec *p)
 {
+    if (!p) return;
     Lzma2Dec_Init(p);
 }
 
@@ -51,6 +67,9 @@ FUNCTIONEXPORT void FUNCTIONCALLINGCONVENCTION SZ_Lzma2_v25_01_Dec_Init(CLzma2De
 FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_Lzma2_v25_01_Dec_DecodeToDic(CLzma2Dec *p, size_t dicLimit,
     const uint8_t *src, size_t *srcLen, int32_t finishMode, int32_t *status)
 {
+    if (!p || !srcLen || !status || SZ_LZ_NULL_BUF(src, *srcLen) || !p->decoder.probs || !p->decoder.dic ||
+        dicLimit > p->decoder.dicBufSize)
+        return SZ_ERROR_PARAM;
     return Lzma2Dec_DecodeToDic(p, dicLimit, src, srcLen, finishMode, (ELzmaStatus *)status);
 }
 
@@ -58,13 +77,18 @@ FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_Lzma2_v25_01_Dec_DecodeToDi
 FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_Lzma2_v25_01_Dec_DecodeToBuf(CLzma2Dec *p, uint8_t *dest, size_t *destLen,
     const uint8_t *src, size_t *srcLen, int32_t finishMode, int32_t *status)
 {
+    if (!p || !destLen || !srcLen || !status || SZ_LZ_NULL_BUF(dest, *destLen) || SZ_LZ_NULL_BUF(src, *srcLen) ||
+        !p->decoder.probs || !p->decoder.dic)
+        return SZ_ERROR_PARAM;
     return Lzma2Dec_DecodeToBuf(p, dest, destLen, src, srcLen, finishMode, (ELzmaStatus *)status);
 }
 
 /* Parses compressed data stream up to the next independent block or next chunk data. */
-FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_Lzma2_v25_01_Dec_Parse(CLzma2Dec *p, size_t outSize, 
+FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_Lzma2_v25_01_Dec_Parse(CLzma2Dec *p, size_t outSize,
     const uint8_t *src, size_t *srcLen, int checkFinishBlock)
 {
+    if (!p || !srcLen || SZ_LZ_NULL_BUF(src, *srcLen))
+        return LZMA_STATUS_NOT_SPECIFIED;   // Lzma2Dec_Parse's own "data error" status
     return Lzma2Dec_Parse(p, outSize, src, srcLen, checkFinishBlock);
 }
 
@@ -72,6 +96,8 @@ FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_Lzma2_v25_01_Dec_Parse(CLzm
 FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_Lzma2_v25_01_Decode(uint8_t *dest, size_t *destLen, const uint8_t *src, size_t *srcLen,
     uint8_t prop, int32_t finishMode, int32_t *status)
 {
+    if (!destLen || !srcLen || !status || SZ_LZ_NULL_BUF(dest, *destLen) || SZ_LZ_NULL_BUF(src, *srcLen))
+        return SZ_ERROR_PARAM;
     return Lzma2Decode(dest, destLen, src, srcLen, prop, finishMode, (ELzmaStatus *)status, &g_AlignedAlloc);
 }
 
@@ -79,12 +105,14 @@ FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_Lzma2_v25_01_Decode(uint8_t
 /* Constructs the LZMA2 encoder. */
 FUNCTIONEXPORT void FUNCTIONCALLINGCONVENCTION SZ_Lzma2_v25_01_Enc_Construct(CLzma2EncProps *p)
 {
+    if (!p) return;
     Lzma2EncProps_Init(p);
 }
 
 /* Normalizes the LZMA2 encoder properties. */
 FUNCTIONEXPORT void FUNCTIONCALLINGCONVENCTION SZ_Lzma2_v25_01_Enc_Normalize(CLzma2EncProps *p)
 {
+    if (!p) return;
     Lzma2EncProps_Normalize(p);
 }
 
@@ -97,12 +125,14 @@ FUNCTIONEXPORT CLzma2EncHandle FUNCTIONCALLINGCONVENCTION SZ_Lzma2_v25_01_Enc_Cr
 /* Destroys the LZMA2 encoder handle. */
 FUNCTIONEXPORT void FUNCTIONCALLINGCONVENCTION SZ_Lzma2_v25_01_Enc_Destroy(CLzma2EncHandle p)
 {
+    if (!p) return;
     Lzma2Enc_Destroy(p);
 }
 
 /* Sets properties for the LZMA2 encoder. */
 FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_Lzma2_v25_01_Enc_SetProps(CLzma2EncHandle p, const CLzma2EncProps *props)
 {
+    if (!p || !props) return SZ_ERROR_PARAM;
     // Lzma2Enc_SetProps assigns the passed CLzma2EncProps to CLzma2Enc.
     // Copy the data as C# will remove the original from the stack, this removes any C# requirement for pinning etc
     CLzma2EncProps newProps;
@@ -113,12 +143,14 @@ FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_Lzma2_v25_01_Enc_SetProps(C
 /* Sets expected data size for the LZMA2 encoder. */
 FUNCTIONEXPORT void FUNCTIONCALLINGCONVENCTION SZ_Lzma2_v25_01_Enc_SetDataSize(CLzma2EncHandle p, UInt64 expectedDataSize)
 {
+    if (!p) return;
     Lzma2Enc_SetDataSize(p, expectedDataSize);
 }
 
 /* Writes properties of the LZMA2 encoder. */
 FUNCTIONEXPORT uint8_t FUNCTIONCALLINGCONVENCTION SZ_Lzma2_v25_01_Enc_WriteProperties(CLzma2EncHandle p)
 {
+    if (!p) return 0xFF;   // no valid LZMA2 property is above 40, so every decoder rejects it
     return Lzma2Enc_WriteProperties(p);
 }
 
@@ -130,6 +162,8 @@ FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_Lzma2_v25_01_Enc_Encode2(CL
     size_t inDataSize,
     ICompressProgressPtr progress)
 {
+    if (!p || !outBufSize || SZ_LZ_NULL_BUF(outBuf, *outBufSize) || SZ_LZ_NULL_BUF(inData, inDataSize))
+        return SZ_ERROR_PARAM;
     return Lzma2Enc_Encode2(p, 0, outBuf, outBufSize, 0, inData, inDataSize, progress);
 }
 
@@ -140,36 +174,42 @@ FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_Lzma2_v25_01_Enc_Encode2(CL
 /* Constructs the LZMA decoder. */
 FUNCTIONEXPORT void FUNCTIONCALLINGCONVENCTION SZ_Lzma_v25_01_Dec_Construct(CLzmaDec *p)
 {
+    if (!p) return;
     LzmaDec_Construct(p);
 }
 
 /* Initializes the LZMA decoder. */
 FUNCTIONEXPORT void FUNCTIONCALLINGCONVENCTION SZ_Lzma_v25_01_Dec_Init(CLzmaDec *p)
 {
+    if (!p) return;
     LzmaDec_Init(p);
 }
 
 /* Allocates memory for LZMA decoder properties. */
 FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_Lzma_v25_01_Dec_AllocateProbs(CLzmaDec *p, const uint8_t *props, uint32_t propsSize)
 {
+    if (!p || SZ_LZ_NULL_BUF(props, propsSize)) return SZ_ERROR_PARAM;
     return LzmaDec_AllocateProbs(p, props, propsSize, &g_AlignedAlloc);
 }
 
 /* Frees memory for LZMA decoder properties. */
 FUNCTIONEXPORT void FUNCTIONCALLINGCONVENCTION SZ_Lzma_v25_01_Dec_FreeProbs(CLzmaDec *p)
 {
+    if (!p) return;
     LzmaDec_FreeProbs(p, &g_AlignedAlloc);
 }
 
 /* Allocates memory for the LZMA decoder. */
 FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_Lzma_v25_01_Dec_Allocate(CLzmaDec *p, const uint8_t *props, uint32_t propsSize)
 {
+    if (!p || SZ_LZ_NULL_BUF(props, propsSize)) return SZ_ERROR_PARAM;
     return LzmaDec_Allocate(p, props, propsSize, &g_AlignedAlloc);
 }
 
 /* Frees memory for the LZMA decoder. */
 FUNCTIONEXPORT void FUNCTIONCALLINGCONVENCTION SZ_Lzma_v25_01_Dec_Free(CLzmaDec *p)
 {
+    if (!p) return;
     LzmaDec_Free(p, &g_AlignedAlloc);
 }
 
@@ -177,6 +217,8 @@ FUNCTIONEXPORT void FUNCTIONCALLINGCONVENCTION SZ_Lzma_v25_01_Dec_Free(CLzmaDec 
 FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_Lzma_v25_01_Dec_DecodeToDic(CLzmaDec *p, size_t dicLimit,
     const uint8_t *src, size_t *srcLen, ELzmaFinishMode finishMode, ELzmaStatus *status)
 {
+    if (!p || !srcLen || !status || SZ_LZ_NULL_BUF(src, *srcLen) || !p->probs || !p->dic || dicLimit > p->dicBufSize)
+        return SZ_ERROR_PARAM;
     return LzmaDec_DecodeToDic(p, dicLimit, src, srcLen, finishMode, status);
 }
 
@@ -184,6 +226,9 @@ FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_Lzma_v25_01_Dec_DecodeToDic
 FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_Lzma_v25_01_Dec_DecodeToBuf(CLzmaDec *p, uint8_t *dest, size_t *destLen,
     const uint8_t *src, size_t *srcLen, ELzmaFinishMode finishMode, ELzmaStatus *status)
 {
+    if (!p || !destLen || !srcLen || !status || SZ_LZ_NULL_BUF(dest, *destLen) || SZ_LZ_NULL_BUF(src, *srcLen) ||
+        !p->probs || !p->dic)
+        return SZ_ERROR_PARAM;
     return LzmaDec_DecodeToBuf(p, dest, destLen, src, srcLen, finishMode, status);
 }
 
@@ -191,6 +236,9 @@ FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_Lzma_v25_01_Dec_DecodeToBuf
 FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_Lzma_v25_01_Dec_LzmaDecode(uint8_t *dest, size_t *destLen, const uint8_t *src, size_t *srcLen,
     const uint8_t *propData, unsigned propSize, ELzmaFinishMode finishMode, ELzmaStatus *status)
 {
+    if (!destLen || !srcLen || !status || SZ_LZ_NULL_BUF(dest, *destLen) || SZ_LZ_NULL_BUF(src, *srcLen) ||
+        SZ_LZ_NULL_BUF(propData, propSize))
+        return SZ_ERROR_PARAM;
     return LzmaDecode(dest, destLen, src, srcLen, propData, propSize, finishMode, status, &g_AlignedAlloc);
 }
 
@@ -201,18 +249,21 @@ FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_Lzma_v25_01_Dec_LzmaDecode(
 /* Allocates memory for LZMA encoder properties. */
 FUNCTIONEXPORT void FUNCTIONCALLINGCONVENCTION SZ_Lzma_v25_01_EncProps_Init(CLzmaEncProps *p)
 {
+    if (!p) return;
     LzmaEncProps_Init(p);
 }
 
 /* Normalizes the LZMA encoder properties. */
 FUNCTIONEXPORT void FUNCTIONCALLINGCONVENCTION SZ_Lzma_v25_01_EncProps_Normalize(CLzmaEncProps *p)
 {
+    if (!p) return;
     LzmaEncProps_Normalize(p);
 }
 
 /* Gets the dictionary size from the LZMA encoder properties. */
 FUNCTIONEXPORT uint32_t FUNCTIONCALLINGCONVENCTION SZ_Lzma_v25_01_EncProps_GetDictSize(const CLzmaEncProps *props2)
 {
+    if (!props2) return 0;
     return LzmaEncProps_GetDictSize(props2);
 }
 
@@ -225,30 +276,35 @@ FUNCTIONEXPORT CLzmaEncHandle FUNCTIONCALLINGCONVENCTION SZ_Lzma_v25_01_Enc_Crea
 /* Destroys the LZMA encoder handle. */
 FUNCTIONEXPORT void FUNCTIONCALLINGCONVENCTION SZ_Lzma_v25_01_Enc_Destroy(CLzmaEncHandle p)
 {
+    if (!p) return;
     LzmaEnc_Destroy(p, &g_AlignedAlloc, &g_BigAlloc);
 }
 
 /* Sets properties for the LZMA encoder. */
 FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_Lzma_v25_01_Enc_SetProps(CLzmaEncHandle p, const CLzmaEncProps *props)
 {
+    if (!p || !props) return SZ_ERROR_PARAM;
     return LzmaEnc_SetProps(p, props);
 }
 
 /* Sets the expected data size for the LZMA encoder. */
 FUNCTIONEXPORT void FUNCTIONCALLINGCONVENCTION SZ_Lzma_v25_01_Enc_SetDataSize(CLzmaEncHandle p, uint64_t expectedDataSize)
 {
+    if (!p) return;
     LzmaEnc_SetDataSize(p, expectedDataSize);
 }
 
 /* Writes properties of the LZMA encoder to a buffer. */
 FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_Lzma_v25_01_Enc_WriteProperties(CLzmaEncHandle p, uint8_t *properties, size_t *size)
 {
+    if (!p || !size || SZ_LZ_NULL_BUF(properties, *size)) return SZ_ERROR_PARAM;
     return LzmaEnc_WriteProperties(p, properties, size);
 }
 
 /* Checks if the LZMA encoder should write an end mark. */
 FUNCTIONEXPORT unsigned FUNCTIONCALLINGCONVENCTION SZ_Lzma_v25_01_Enc_IsWriteEndMark(CLzmaEncHandle p)
 {
+    if (!p) return 0;
     return LzmaEnc_IsWriteEndMark(p);
 }
 
@@ -256,6 +312,7 @@ FUNCTIONEXPORT unsigned FUNCTIONCALLINGCONVENCTION SZ_Lzma_v25_01_Enc_IsWriteEnd
 FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_Lzma_v25_01_Enc_Encode(CLzmaEncHandle p, ISeqOutStreamPtr outStream, ISeqInStreamPtr inStream,
     ICompressProgressPtr progress)
 {
+    if (!p || !outStream || !inStream) return SZ_ERROR_PARAM;
     return LzmaEnc_Encode(p, outStream, inStream, progress, &g_AlignedAlloc, &g_BigAlloc);
 }
 
@@ -263,6 +320,7 @@ FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_Lzma_v25_01_Enc_Encode(CLzm
 FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_Lzma_v25_01_Enc_MemEncode(CLzmaEncHandle p, uint8_t *dest, size_t *destLen, const uint8_t *src, size_t srcLen,
     int writeEndMark, ICompressProgressPtr progress)
 {
+    if (!p || !destLen || SZ_LZ_NULL_BUF(dest, *destLen) || SZ_LZ_NULL_BUF(src, srcLen)) return SZ_ERROR_PARAM;
     return LzmaEnc_MemEncode(p, dest, destLen, src, srcLen, writeEndMark, progress, &g_AlignedAlloc, &g_BigAlloc);
 }
 
@@ -270,6 +328,9 @@ FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_Lzma_v25_01_Enc_MemEncode(C
 FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_Lzma_v25_01_Enc_LzmaEncode(uint8_t *dest, size_t *destLen, const uint8_t *src, size_t srcLen,
     const CLzmaEncProps *props, uint8_t *propsEncoded, size_t *propsSize, int writeEndMark, ICompressProgressPtr progress)
 {
+    if (!destLen || !props || !propsSize || SZ_LZ_NULL_BUF(dest, *destLen) || SZ_LZ_NULL_BUF(src, srcLen) ||
+        SZ_LZ_NULL_BUF(propsEncoded, *propsSize))
+        return SZ_ERROR_PARAM;
     return LzmaEncode(dest, destLen, src, srcLen, props, propsEncoded, propsSize, writeEndMark, progress, &g_AlignedAlloc, &g_BigAlloc);
 }
 
@@ -314,22 +375,28 @@ static SRes BufferInStream_Read(ISeqInStreamPtr pp, void* data, size_t* size)
 
 FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_Lzma_v25_01_Enc_LzmaCodeMultiCallPrepare(CLzmaEncHandle p, UInt32 *blockSize, UInt32 *dictSize, uint32_t final)
 {
+    if (!p || !blockSize || !dictSize) return SZ_ERROR_PARAM;
     return LzmaEnc_LzmaCodeMultiCallPrepare(p, blockSize, dictSize, &g_AlignedAlloc, &g_BigAlloc);
 }
 
 FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_Lzma_v25_01_Enc_LzmaCodeMultiCall(CLzmaEncHandle p, uint8_t *dest, size_t *destLen, CBufferInStream *srcStream, int32_t limit, uint32_t* availableBytes, uint32_t final)
 {
+    if (!p || !destLen || !availableBytes || SZ_LZ_NULL_BUF(dest, *destLen) || SZ_LZ_BAD_INSTREAM(srcStream))
+        return SZ_ERROR_PARAM;
     srcStream->vt.Read = BufferInStream_Read;
     return LzmaEnc_LzmaCodeMultiCall(p, dest, destLen, &srcStream->vt, limit, srcStream->processed, availableBytes, final);
 }
 
 FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_Lzma2_v25_01_Enc_EncodeMultiCallPrepare(CLzma2EncHandle p)
 {
+    if (!p) return SZ_ERROR_PARAM;
     return Lzma2Enc_EncodeMultiCallPrepare(p);
 }
 
 FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_Lzma2_v25_01_Enc_EncodeMultiCall(CLzma2EncHandle p, uint8_t *outBuf, size_t *outBufSize, CBufferInStream *srcStream, uint32_t init)
 {
+    if (!p || !outBufSize || SZ_LZ_NULL_BUF(outBuf, *outBufSize) || SZ_LZ_BAD_INSTREAM(srcStream))
+        return SZ_ERROR_PARAM;
     srcStream->vt.Read = BufferInStream_Read;
     return Lzma2Enc_EncodeMultiCall(p, outBuf, outBufSize, &srcStream->vt, init);
 }
