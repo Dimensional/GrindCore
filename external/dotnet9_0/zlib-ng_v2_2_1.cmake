@@ -40,6 +40,21 @@ if (CLR_CMAKE_TARGET_ARCH_ARM AND CMAKE_C_COMPILER_ID MATCHES "Clang")
     target_compile_options(zlib PRIVATE "SHELL:-include ${CMAKE_CURRENT_LIST_DIR}/zlib-ng_arm32_neon_ld4.h")
 endif()
 
+# [audit fix, audit/build-exam.md F2] On aarch64 Linux, zlib-ng 2.2.1 looks for HWCAP_CRC32 only in <sys/auxv.h>, which
+# glibc 2.17 (linux-arm64-legacy) doesn't define there. zlib-ng then can't detect CRC32 at run time, and crc32_acle is
+# built but never used. The kernel's <asm/hwcap.h> has it: use that, as zlib-ng's own 32-bit branch does (ARM_ASM_HWCAP).
+if (CLR_CMAKE_TARGET_LINUX AND CLR_CMAKE_TARGET_ARCH_ARM64 AND NOT ARM_AUXV_HAS_CRC32)
+    include(CheckCSourceCompiles)
+    check_c_source_compiles(
+        "#include <sys/auxv.h>
+        #include <asm/hwcap.h>
+        int main() { return (getauxval(AT_HWCAP) & HWCAP_CRC32); }"
+        GRINDCORE_ARM64_ASM_HWCAP_HAS_CRC32)
+    if (GRINDCORE_ARM64_ASM_HWCAP_HAS_CRC32)
+        target_compile_definitions(zlib PRIVATE ARM_AUXV_HAS_CRC32 ARM_ASM_HWCAP)
+    endif()
+endif()
+
 set_target_properties(zlib PROPERTIES DEBUG_POSTFIX "")
 
 add_library(zlibng_v2_2_1 ALIAS zlib)
