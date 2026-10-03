@@ -122,6 +122,16 @@ endif()
 # Shared library (for P/Invoke)
 add_library(GrindCore SHARED ${GRINDCORE_SOURCES})
 target_link_libraries(GrindCore PRIVATE ${GRINDCORE_THIRD_PARTY_LIBS})
+# [audit fix, audit/build-exam.md B1] Brotli's encoder calls log2 (libm), and Fast-LZMA2's thread pool calls pthread_*
+# (libpthread before glibc 2.34). Unlinked, the library only loaded into processes that already had both (.NET, Python),
+# and a plain C host got "undefined symbol" from dlopen. --no-undefined makes the next missing library a link error.
+if (CLR_CMAKE_TARGET_LINUX)
+    find_package(Threads REQUIRED)
+    target_link_libraries(GrindCore PRIVATE m Threads::Threads)
+    if (NOT CLR_CMAKE_ENABLE_SANITIZERS)  # sanitizer runtimes are resolved from the host process
+        target_link_options(GrindCore PRIVATE "LINKER:--no-undefined")
+    endif()
+endif()
 set_target_properties(GrindCore PROPERTIES
     OUTPUT_NAME "GrindCore"
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
