@@ -1,0 +1,11 @@
+0.3.7
+https://github.com/BLAKE3-team/BLAKE3/tree/0.3.7/c
+
+The files in blake3_v0_3_7/ are official BLAKE3 0.3.7, byte for byte: c/blake3.c, blake3.h, blake3_impl.h,
+blake3_dispatch.c, blake3_portable.c, blake3_sse2.c, blake3_sse41.c, blake3_avx2.c, blake3_avx512.c (not built),
+blake3_neon.c and README.md, plus the repository's LICENSE. Taken from GitHub's archive of tag 0.3.7,
+SHA-256 304b3608770cc91a151c7c4af5541dd6dd29716bad449ae5a418643ef15bcc5b.
+
+GrindCore (audit/native-fixes, audit/build-exam.md F3): built with the run-time SIMD dispatch, in place of the
+portable-only copy merged into external/mcmilk/C/hashes/blake3.c (same version, same digests). The assembler files and
+the tests aren't vendored; the intrinsics files cover every compiler GrindCore builds with.

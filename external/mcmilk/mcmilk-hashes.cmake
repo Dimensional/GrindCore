@@ -30,7 +30,7 @@ else ()
 endif ()
 
 set (HASHES_SOURCES_BASE
-    blake3.c
+    # blake3.c -- replaced by the official 0.3.7 sources with SIMD dispatch (external/blake3, audit/build-exam.md F3)
     md2.c
     md4.c
     md5.c

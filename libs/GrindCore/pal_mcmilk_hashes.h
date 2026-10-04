@@ -14,7 +14,7 @@
 #include <external/mcmilk/C/hashes/md2.h>
 #include <external/mcmilk/C/hashes/md4.h>
 #include <external/mcmilk/C/hashes/md5.h>
-#include <external/mcmilk/C/hashes/blake3.h>
+#include <external/blake3/blake3_v0_3_7/blake3.h>   /* official 0.3.7 with SIMD dispatch (audit/build-exam.md F3) */
 #include <external/mcmilk/C/hashes/sha3.h>
 #include <external/mcmilk/C/hashes/sha512.h>
 #include <external/mcmilk/C/7z-deps/Sha1.h>

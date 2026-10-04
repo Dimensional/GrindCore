@@ -34,6 +34,7 @@ include(${CLR_SRC_NATIVE_DIR}/external/shared_asm.cmake)
 include(${CLR_SRC_NATIVE_DIR}/external/dotnet9_0/zlib-ng_v2_2_1.cmake)
 include(${CLR_SRC_NATIVE_DIR}/external/dotnet8_0/zlib_v1_3_1.cmake)
 include(${CLR_SRC_NATIVE_DIR}/external/mcmilk/mcmilk-hashes.cmake)
+include(${CLR_SRC_NATIVE_DIR}/external/blake3/blake3-blake3_v0_3_7.cmake)
 include(${CLR_SRC_NATIVE_DIR}/external/mcmilk/mcmilk-fast-lzma2.cmake)
 include(${CLR_SRC_NATIVE_DIR}/external/lz4/lz4-lz4.cmake)
 include(${CLR_SRC_NATIVE_DIR}/external/sevenzip/sevenzip-lzma_v25_01.cmake)
@@ -49,6 +50,7 @@ set(GRINDCORE_THIRD_PARTY_LIBS
     zlibng_v2_2_1
     zlib_v1_3_1
     hashes
+    blake3_v0_3_7
     fastlzma2_v1_0_1
     lzma_v25_01
     lz4_v1_10_0

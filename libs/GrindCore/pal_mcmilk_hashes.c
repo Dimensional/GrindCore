@@ -60,7 +60,7 @@ FUNCTIONEXPORT void FUNCTIONCALLINGCONVENCTION SZ_Black2sp_Prepare(void) {
 /////////////////////////////////////////
 // Blake3
 FUNCTIONEXPORT const char* FUNCTIONCALLINGCONVENCTION SZ_blake3_version(void) {
-    return blake3_version();
+    return "0.3.7"; /* official 0.3.7 has no blake3_version(); the merged copy defined it */
 }
 
 FUNCTIONEXPORT void FUNCTIONCALLINGCONVENCTION SZ_blake3_hasher_init(blake3_hasher *self) {
