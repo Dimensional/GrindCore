@@ -195,6 +195,10 @@ FUNCTIONEXPORT uint32_t FUNCTIONCALLINGCONVENCTION DN9_ZLibNg_v2_2_1_Crc32(uint3
 {
     assert(buffer != NULL);
 
+    /* [audit fix, audit/build-exam.md W1] zlib takes the length as an unsigned uInt, so a negative length read up to
+       4 GiB past the buffer. It's treated as no data. (A NULL buffer is zlib's own idiom: it returns 0.) */
+    if (len < 0) return crc;
+
     unsigned long result = Z_v2_2_1_crc32(crc, buffer, len);
     assert(result <= UINT32_MAX);
     return (uint32_t)result;

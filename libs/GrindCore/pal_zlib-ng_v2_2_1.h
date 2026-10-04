@@ -124,7 +124,7 @@ FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION DN9_ZLibNg_v2_2_1_InflateEnd(P
 
 /*
 Update a running CRC-32 with the bytes buffer[0..len-1] and return the
-updated CRC-32.
+updated CRC-32. A negative len is treated as 0 (crc is returned unchanged).
 
 Returns the updated CRC-32.
 */
