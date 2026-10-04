@@ -478,10 +478,12 @@ static size_t ZSTD_v1_5_2_seekable_finishFrame(ZSTD_v1_5_2_seekable* zs, U32 fra
 size_t ZSTD_v1_5_2_seekable_decompress(ZSTD_v1_5_2_seekable* zs, void* dst, size_t len, unsigned long long offset)
 {
     unsigned long long const eos = zs->seekTable.entries[zs->seekTable.tableLen].dOffset;
-    /* [audit fix, audit/other-codecs.md 4.8.2] Nothing to read at or past the end: there, `eos - offset` wrapped and was
-     * returned as the length read. The clamp is also written so that `offset + len` can't wrap. */
-    if (offset >= eos) {
-        return 0;
+    /* [audit fix, audit/other-codecs.md 4.8.2] Upstream's clamp `len = eos - offset` wrapped for a read starting past the
+     * end, and returned the wrapped value: a garbage length, or (within ~120 bytes of the end) a value that reads as an
+     * unspecified error, which is what upstream's tests #2335 rely on. Past the end is an error; at the end, 0 bytes
+     * (as upstream). The clamp is also written so that `offset + len` can't wrap. */
+    if (offset > eos) {
+        return ERROR(frameIndex_tooLarge);
     }
     if (len > eos - offset) {
         len = (size_t)(eos - offset);
