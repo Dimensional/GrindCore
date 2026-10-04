@@ -1,0 +1,6 @@
+# portable Pythons (python.org embeddable zip etc.), never installed: delete the folder to remove
+.python/
+__pycache__/
+# the reference builds (ref/build_*_ref.py) and the upstream suites' release archives, fetched and SHA-256-checked
+ref/out*/
+ref/tb/
