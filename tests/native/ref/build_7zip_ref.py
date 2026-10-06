@@ -122,7 +122,7 @@ def arch_name(a):
 def build_unix(a, src, lib):
     cdir = os.path.join(src, "C")
     cmd = a.cc.split() + ["-O2", "-fPIC", "-dynamiclib" if sys.platform == "darwin" else "-shared", "-o", lib,
-                          "-I", cdir] + [os.path.join(cdir, c) for c in C_FILES]
+                          "-I", cdir] + a.cflags.split() + [os.path.join(cdir, c) for c in C_FILES]
     if a.asm:
         if arch_name(a) != "arm64":
             sys.exit("--asm off Windows is the arm64 decoder only (upstream's x86-64 LzmaDecOpt.asm is MASM syntax)")
@@ -166,8 +166,9 @@ def build_windows(a, src, lib):
     with open(os.path.join(work, "ref.def"), "w") as f:
         f.write("EXPORTS\n" + "".join("  %s\n" % n for n in EXPORTS) + "".join("  %s DATA\n" % n for n in EXPORT_DATA))
     cdir = os.path.join(src, "C")
-    cl = 'cl /nologo /c /O2 /Oi /Gy /MT /DNDEBUG /W3 /I"%s"%s %s' % (
-        cdir, " /DZ7_LZMA_DEC_OPT" if a.asm else "", " ".join('"%s"' % os.path.join(cdir, c) for c in C_FILES))
+    cl = 'cl /nologo /c /O2 /Oi /Gy /MT /DNDEBUG /W3 /I"%s"%s%s %s' % (
+        cdir, " /DZ7_LZMA_DEC_OPT" if a.asm else "", " " + a.cflags if a.cflags else "",
+        " ".join('"%s"' % os.path.join(cdir, c) for c in C_FILES))
     steps = [cl]
     objs = ["%s.obj" % os.path.splitext(c)[0] for c in C_FILES]
     if a.asm and arch == "x64":
@@ -209,6 +210,7 @@ def main():
     ap.add_argument("--asm-obj", help="win-arm64 --asm: a LzmaDecOpt.obj assembled elsewhere (clang "
                     "--target=aarch64-pc-windows-msvc), for hosts without clang")
     ap.add_argument("--arch", choices=("x64", "x86", "arm64"))
+    ap.add_argument("--cflags", default="", help="extra compiler options, written --cflags=... (e.g. --cflags=-DLZMA_LOG_BSR; MSVC takes -D too)")
     ap.add_argument("--src", help="a folder with C/ and Asm/ from an earlier fetch (checked against the pins)")
     ap.add_argument("--fetch-only", metavar="DIR", help="fetch and check the files into DIR, and build nothing")
     a = ap.parse_args()

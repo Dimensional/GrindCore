@@ -57,7 +57,11 @@ comparisons against official libraries skip, each giving its reason.
   - `determinism.py`: hashes compressed output to compare builds and RIDs;
   - `bench_*.py`, speed;
   - `fl2_timeout_stress.py`;
-  - `ref/`: the reference builders and `upstream_tests.py` (below).
+  - `arch_limits.py`: the architecture limitations (dictionary limits by pointer width, LZ4's fast-mode levels) as
+    lines to diff between RIDs. `--official` compares with official 7-Zip, and `--big` runs the large-input cases;
+    `gctest/test_arch_limits.py` pins the cheap facts on every RID;
+  - `ref/`: the reference builders, `upstream_tests.py` (below), and `lzma_dict_harness.c`, official 7-Zip's LZMA
+    with no Python, for 32-bit measurements with 4 GB of address space (build commands in its header).
 
 ## Running it per RID
 
@@ -89,6 +93,7 @@ below, keep the references, and run each Linux RID in the image GrindCore.build 
 | `GC_REF_7ZIP` (file) | `ref/build_7zip_ref.py` | 7-Zip 25.01's LZMA/LZMA2; `--asm` adds the assembler decoder (win-x64, arm64) |
 
 - Each builder writes to `--out ref/out-<rid>` (git-ignored) and downloads its archive, checking the SHA-256.
+  `build_7zip_ref.py --cflags=...` adds compiler options, e.g. `--cflags=-DLZMA_LOG_BSR`.
   `--tarballs <folder>` (and `--src <folder>/7zip-25.01`) use archives already on disk, for hosts without network.
 - **Build the references for each architecture, in the RID's own build environment.** Brotli's Q10/Q11 output
   depends on the compiler for some inputs, so its builder (and Fast-LZMA2's, to match) picks the compiler as
