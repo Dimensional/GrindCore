@@ -93,6 +93,11 @@ KNOWN_DEFECTS = {
                                  "(FL2_decompress, FL2_decompressMt, FL2_decompressDCtx, the single-threaded stream). "
                                  "Read-only, corrupt input only; a crash only at a page boundary. Unfixed in 1.0.1 and "
                                  "master; audit/other-codecs.md 4.4.1",
+    "fl2-lzma-chunk-without-props": "fast-lzma2's LZMA2 decoder never checks need_init_prop, so after a dictionary "
+                                    "reset it decodes an LZMA chunk that carries no properties, with pb never set "
+                                    "(lzma2_dec.c:959-961 set lc twice): out-of-bounds probability accesses on "
+                                    "crafted input. Unfixed in 1.0.1 and master; a fix needs Nanook's approval; "
+                                    "audit/other-codecs.md 4.4.1",
     "lzma-null-args": "the LZMA/LZMA2 PAL passes every pointer through, and 7-Zip dereferences a NULL decoder, encoder, "
                       "length, status or properties pointer (even Dec_Free(NULL)), and decodes with a freed decoder or "
                       "past its dictionary: a crash; fixed in the PAL on audit/native-fixes; audit/lzma.md 3.6",

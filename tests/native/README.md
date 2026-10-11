@@ -64,7 +64,9 @@ comparisons against official libraries skip, each giving its reason.
     lines to diff between RIDs. `--official` compares with official 7-Zip, and `--big` runs the large-input cases;
     `gctest/test_arch_limits.py` pins the cheap facts on every RID;
   - `ref/`: the reference builders, `upstream_tests.py` (below), and `lzma_dict_harness.c`, official 7-Zip's LZMA
-    with no Python, for 32-bit measurements with 4 GB of address space (build commands in its header).
+    with no Python, for 32-bit measurements with 4 GB of address space (build commands in its header);
+  - `fuzz/`: libFuzzer harnesses for the Fast-LZMA2 and 7-Zip decoders, and `fuzz.py`, which builds and runs them
+    (below).
 
 ## Running it per RID
 
@@ -158,6 +160,31 @@ covered (the suites are make- and shell-based); the native suite covers Windows.
 - **macOS:** `leaks`, run on the framework's real Python binary, because the Command Line Tools' `python3` is a
   launcher and `leaks` would see nothing.
 - **When:** the codec being changed before each commit; the whole suite once per codec or phase.
+
+## Fuzzing (`fuzz/`)
+
+Time-boxed libFuzzer runs of a decoder under AddressSanitizer, on Linux:
+
+```
+python3 fuzz/fuzz.py fl2  --minutes 30      # Fast-LZMA2: one-shot, 2 threads, and the stream
+python3 fuzz/fuzz.py lzma --minutes 20      # 7-Zip's LZMA and LZMA2 decoders: one-shot and streamed
+```
+
+- **What it builds:** each harness (`fuzz/<target>_decode.c`) is compiled with GrindCore's own copy of that
+  library's sources, as GrindCore's CMake lists them, at `-O1 -g`. Same source, so the same bugs; not GrindCore's
+  machine code.
+- **Seeds and output:** the seeds are valid streams from Python's `lzma`. Everything goes to `fuzz/out/`
+  (git-ignored): the corpus, which later runs continue from, and findings as `<target>-crash-*`, `-leak-*` and
+  `-timeout-*`. Replay one with `fuzz/out/<target>_decode <file>`.
+- **Where:** the linux-x64 build image has clang 15 with libFuzzer. Run the container with
+  `--security-opt seccomp=unconfined`, so `fuzz.py` can turn off address randomisation (`setarch -R`); otherwise
+  clang 15's ASan crashes at start in about 3 runs of 10.
+- **What counts:** crashes, writes past a buffer, uses after free, leaks and hangs.
+  - Fast-LZMA2 is built with ASan's read checks off. Its decoder's known over-read on corrupt input is a read, and
+    with reads checked it stops every run within seconds.
+  - Inputs that declare a dictionary over 16 MiB are capped, since allocating what a stream declares is the
+    format, not a defect.
+- The other decoders (zstd, LZ4, Brotli, zlib, bzip2) aren't here: they are fuzzed continuously upstream.
 
 ## Harness lessons (each one cost a debugging session)
 

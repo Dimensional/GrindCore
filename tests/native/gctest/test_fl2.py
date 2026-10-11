@@ -289,6 +289,26 @@ class Fl2Tests(unittest.TestCase):
                 if "frame 373678b773961a81" not in out:  # the frame linux-x64 writes, which the flips were found in
                     self.skipTest("this build writes a different frame (%s), so the six flips don't apply" % out.split()[1])
 
+    def test_lzma_chunk_without_properties_is_rejected(self):
+        """After a dictionary reset, LZMA2 needs a chunk that carries properties (lc/lp/pb) before any that don't.
+        7-Zip's decoder rejects one without; upstream fast-lzma2 sets need_init_prop (lzma2_dec.c:967, 1054, 1219) but
+        never checks it, and its defaults leave pb unset (:959-961 set lc twice). So a frame with an uncompressed
+        chunk that resets the dictionary, then an LZMA chunk with mode 1, is decoded with pb from uninitialised memory,
+        and the probability pointers it computes go out of bounds (found by fuzz/fl2_decode.c; other-codecs.md 4.4.1,
+        finding 11). Checked safely: given only that chunk's 5-byte header, a fixed decoder returns an error, and an
+        unfixed one asks for its data."""
+        frame = bytes([16]) + bytes([0x01, 0x00, 0x0F]) + b"a" * 16 + bytes([0xA0, 0x00, 0x0F, 0x00, 0x04])
+        d = self.z.dstream(1)
+        src, out = F._In(frame), ctypes.create_string_buffer(4096)  # src kept alive for the call
+        try:
+            r, used, wrote = d.call(src, 0, len(frame), out)
+        finally:
+            d.close()
+        self.assertEqual(wrote, 16, "the uncompressed chunk decodes either way")
+        if not F.is_error(r):
+            known(self, "fl2-lzma-chunk-without-props")
+        self.assertEqual(F.error_of(r), F.CORRUPTION_DETECTED)
+
     # ------------------------------------------------------------------ API semantics GrindCore.net relies on
 
     def test_level_resets_parameters(self):

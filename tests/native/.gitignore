@@ -4,3 +4,5 @@ __pycache__/
 # the reference builds (ref/build_*_ref.py) and the upstream suites' release archives, fetched and SHA-256-checked
 ref/out*/
 ref/tb/
+# fuzz/fuzz.py: the harness builds, corpora and findings
+fuzz/out/
