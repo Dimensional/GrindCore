@@ -115,6 +115,64 @@ FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_ZStd_v1_5_2_Seekable_Free(S
 }
 
 //
+// ===== Seek table checks (audit/other-codecs.md 4.8.2) =====
+//
+// zstd's loader takes each seek-table entry's 32-bit sizes as they are. A corrupt or crafted table can then:
+//   - hold a size within zstd's error-code range of 4 GiB, which GetFrameCompressedSize/GetFrameDecompressedSize
+//     return as an error code where size_t is 32-bit (and as the size on 64-bit);
+//   - claim more decompressed data than its frame's compressed bytes can hold, which shows up as a false
+//     GetDecompressedSize;
+//   - place frames past the start of the seek table (checked for InitBuff, where the source's size is known).
+// No file zstd writes does any of these: its frames are at most ZSTD_v1_5_2_seekable_MAX_FRAME_DECOMPRESSED_SIZE. A
+// table that does is rejected with corruption_detected, the same on every RID, and the decoder is freed so nothing can
+// read through it: every call on the context then fails, and Free does nothing. The same checks as the 1.5.7 PAL.
+
+// The most one zstd block decodes to (Block_Maximum_Size). The densest block, RLE, takes 4 bytes for it (a 3-byte
+// header and the byte), so a frame of c compressed bytes decodes to at most c / 4 of these.
+#define SZ_ZSTD_SEEK_BLOCK_MAX ((uint64_t)128 * 1024)
+
+// ZSTD_v1_5_2_error_corruption_detected (zstd_v1_5_2/zstd_errors.h:59). That header can't be included here: the
+// seekable header's bare #include "zstd.h" finds 1.5.7's first on GrindCore's include path, which brings 1.5.7's
+// zstd_errors.h, and the two define the same macros. The tests check the result by its name.
+#define SZ_ZSTD_V1_5_2_CORRUPTION_DETECTED ((size_t)-20)
+
+// Where size_t is 32-bit, an entry size s reads as -(2^32 - s). Testing that with zstd's own isError gives the
+// 32-bit answer on every RID.
+static int SZ_ZStd_v1_5_2_SeekSizeReadsAsError(uint64_t size)
+{
+    return size != 0 && ZSTD_v1_5_2_isError((size_t)0 - (size_t)(((uint64_t)1 << 32) - size));
+}
+
+static size_t SZ_ZStd_v1_5_2_Seekable_CheckTable(SZ_ZStd_v1_5_2_Seekable* ctx, const void* src, size_t srcSize)
+{
+    unsigned const n = ZSTD_v1_5_2_seekable_getNumFrames(ctx->zs);
+    uint64_t end = 0;
+    unsigned i;
+    for (i = 0; i < n; i++) {
+        // each is one 32-bit entry, which size_t holds exactly on every RID
+        uint64_t const c = ZSTD_v1_5_2_seekable_getFrameCompressedSize(ctx->zs, i);
+        uint64_t const d = ZSTD_v1_5_2_seekable_getFrameDecompressedSize(ctx->zs, i);
+        if (SZ_ZStd_v1_5_2_SeekSizeReadsAsError(c) || SZ_ZStd_v1_5_2_SeekSizeReadsAsError(d) ||
+            d > c / 4 * SZ_ZSTD_SEEK_BLOCK_MAX)
+            goto bad;
+        end += c;
+    }
+    if (src) {
+        // the seek table is the last frame: an 8-byte skippable header, the entries, then the footer, whose
+        // descriptor's top bit says whether entries carry a checksum (the loader has checked all of it)
+        const unsigned char* footer = (const unsigned char*)src + srcSize - ZSTD_seekTableFooterSize;
+        uint64_t const entry = (footer[4] & 0x80) ? 12 : 8;
+        if (end + 8 + n * entry + ZSTD_seekTableFooterSize > srcSize)
+            goto bad;
+    }
+    return 0;
+bad:
+    ZSTD_v1_5_2_seekable_free(ctx->zs);
+    ctx->zs = NULL;
+    return SZ_ZSTD_V1_5_2_CORRUPTION_DETECTED;
+}
+
+//
 // ===== Seekable Decompression Initialization - In-Memory =====
 //
 FUNCTIONEXPORT size_t FUNCTIONCALLINGCONVENCTION SZ_ZStd_v1_5_2_Seekable_InitBuff(
@@ -123,7 +181,8 @@ FUNCTIONEXPORT size_t FUNCTIONCALLINGCONVENCTION SZ_ZStd_v1_5_2_Seekable_InitBuf
     size_t srcSize)
 {
     if (!ctx || !ctx->zs || !src) return (size_t)-1;
-    return ZSTD_v1_5_2_seekable_initBuff(ctx->zs, src, srcSize);
+    size_t const r = ZSTD_v1_5_2_seekable_initBuff(ctx->zs, src, srcSize);
+    return ZSTD_v1_5_2_isError(r) ? r : SZ_ZStd_v1_5_2_Seekable_CheckTable(ctx, src, srcSize);
 }
 
 //
@@ -142,7 +201,8 @@ FUNCTIONEXPORT size_t FUNCTIONCALLINGCONVENCTION SZ_ZStd_v1_5_2_Seekable_InitAdv
     customFile.read = readFn;
     customFile.seek = seekFn;
 
-    return ZSTD_v1_5_2_seekable_initAdvanced(ctx->zs, customFile);
+    size_t const r = ZSTD_v1_5_2_seekable_initAdvanced(ctx->zs, customFile);
+    return ZSTD_v1_5_2_isError(r) ? r : SZ_ZStd_v1_5_2_Seekable_CheckTable(ctx, NULL, 0);
 }
 
 //
