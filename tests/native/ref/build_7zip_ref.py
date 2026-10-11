@@ -24,10 +24,12 @@ import argparse
 import hashlib
 import os
 import platform
-import struct
 import subprocess
 import sys
 import urllib.request
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # embeddable Pythons leave it off
+import msvc  # noqa: E402
 
 C_FILES = ["7zStream.c", "Alloc.c", "CpuArch.c", "LzFind.c", "LzFindMt.c", "LzFindOpt.c", "Lzma2Dec.c", "Lzma2DecMt.c",
            "Lzma2Enc.c", "LzmaDec.c", "LzmaEnc.c", "MtCoder.c", "MtDec.c", "Threads.c"]
@@ -82,9 +84,9 @@ EXPORTS = ["LzmaProps_Decode", "LzmaDec_Init", "LzmaDec_AllocateProbs", "LzmaDec
            "Lzma2Dec_DecodeToBuf", "Lzma2Dec_Parse", "Lzma2Decode",
            "Lzma2DecMtProps_Init", "Lzma2DecMt_Create", "Lzma2DecMt_Destroy", "Lzma2DecMt_Decode",
            "LzmaEncProps_Init", "LzmaEncode", "LzmaEnc_Create", "LzmaEnc_Destroy", "LzmaEnc_SetProps",
-           "LzmaEnc_SetDataSize", "LzmaEnc_WriteProperties", "LzmaEnc_MemEncode",
+           "LzmaEnc_SetDataSize", "LzmaEnc_WriteProperties", "LzmaEnc_MemEncode", "LzmaEnc_Encode",
            "Lzma2EncProps_Init", "Lzma2EncProps_Normalize", "Lzma2Enc_Create", "Lzma2Enc_Destroy", "Lzma2Enc_SetProps",
-           "Lzma2Enc_WriteProperties", "Lzma2Enc_Encode2"]
+           "Lzma2Enc_SetDataSize", "Lzma2Enc_WriteProperties", "Lzma2Enc_Encode2"]
 EXPORT_DATA = ["g_Alloc", "g_BigAlloc", "g_AlignedAlloc"]
 
 
@@ -109,14 +111,7 @@ def fetch(tag, src):
 
 
 def arch_name(a):
-    if a.arch:
-        return a.arch
-    m = platform.machine().lower()
-    if m in ("arm64", "aarch64"):
-        return "arm64"
-    if struct.calcsize("P") == 4:
-        return "x86"
-    return "x64"
+    return msvc.arch_name(a.arch)
 
 
 def build_unix(a, src, lib):
@@ -153,18 +148,9 @@ def build_windows(a, src, lib):
     arch = arch_name(a)
     if a.asm and arch == "x86":
         sys.exit("--asm on Windows: x64 (LzmaDecOpt.asm with ml64) or arm64 (LzmaDecOpt.S with clang)")
-    vswhere = os.path.join(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
-                           "Microsoft Visual Studio", "Installer", "vswhere.exe")
-    component = "Microsoft.VisualStudio.Component.VC.Tools." + ("ARM64" if arch == "arm64" else "x86.x64")
-    vs = subprocess.check_output([vswhere, "-latest", "-products", "*", "-requires", component, "-property",
-                                  "installationPath"], universal_newlines=True).strip().splitlines()
-    if not vs:
-        sys.exit("no Visual Studio with %s (vswhere found none)" % component)
-    vcvars = os.path.join(vs[0], "VC", "Auxiliary", "Build", "vcvarsall.bat")
     work = lib + ".work"
     os.makedirs(work, exist_ok=True)
-    with open(os.path.join(work, "ref.def"), "w") as f:
-        f.write("EXPORTS\n" + "".join("  %s\n" % n for n in EXPORTS) + "".join("  %s DATA\n" % n for n in EXPORT_DATA))
+    msvc.write_def(os.path.join(work, "ref.def"), EXPORTS, EXPORT_DATA)
     cdir = os.path.join(src, "C")
     cl = 'cl /nologo /c /O2 /Oi /Gy /MT /DNDEBUG /W3 /I"%s"%s%s %s' % (
         cdir, " /DZ7_LZMA_DEC_OPT" if a.asm else "", " " + a.cflags if a.cflags else "",
@@ -182,7 +168,7 @@ def build_windows(a, src, lib):
         if a.asm_obj:
             obj = os.path.abspath(a.asm_obj)
         else:
-            clang = find_clang(vswhere)
+            clang = find_clang(msvc.vswhere())
             if not clang:
                 sys.exit("--asm on win-arm64 needs clang (Visual Studio's C++ Clang tools) or --asm-obj")
             adir = os.path.join(src, "Asm", "arm64")
@@ -191,14 +177,7 @@ def build_windows(a, src, lib):
                                    os.path.join(adir, "LzmaDecOpt.S")])
         objs.append('"%s"' % obj)
     steps.append('link /nologo /DLL /DEF:ref.def /OUT:"%s" %s' % (lib, " ".join(objs)))
-    host = platform.machine().lower()
-    vcarch = "x64_arm64" if arch == "arm64" and host in ("amd64", "x86_64") else arch   # cross-compiling, as CI does
-    line = 'call "%s" %s >nul && %s' % (vcvars, vcarch, " && ".join(steps))
-    print(line)
-    # one string with /s: a list would be re-quoted with \" escapes, which cmd.exe doesn't understand
-    r = subprocess.call('cmd /d /s /c "%s"' % line, cwd=work)
-    if r:
-        sys.exit("build failed (%d)" % r)
+    msvc.run(arch, steps, work)
 
 
 def main():

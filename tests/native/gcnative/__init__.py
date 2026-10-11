@@ -91,13 +91,35 @@ class _Structs(object):
         return sorted(_spec.STRUCTS)
 
 
+CALLS_ENV = "GCNATIVE_CALLS"
+
+
+def read_calls(log, path):
+    """The exports that libraries loaded from `path` recorded in a GCNATIVE_CALLS file (see Library)."""
+    path, names = os.path.abspath(path), set()
+    try:
+        with open(log) as f:
+            for line in f:
+                p, _, name = line.rstrip("\n").rpartition("\t")
+                if p == path:
+                    names.add(name)
+    except OSError:
+        pass
+    return names
+
+
 class Library(object):
+    """With GCNATIVE_CALLS naming a file in the environment, each export's first call is also appended to that file
+    (library path, tab, name), before the call is made: the suite's child processes report their calls that way, even
+    ones that crash."""
+
     def __init__(self, path):
         self.path = os.path.abspath(path)
         self.dll = ctypes.CDLL(self.path)
         self.struct = _Structs()
         self.called = set()
         self._funcs = {}
+        self._calls_log = os.environ.get(CALLS_ENV)
 
     def has(self, name):
         try:
@@ -118,10 +140,14 @@ class Library(object):
             ret, args = EXPORTS[name]
             raw.restype = _SCALARS[ret]
             raw.argtypes = [_SCALARS[a] if a in _SCALARS else self.struct._ctype(a, []) for a in args]
-            called = self.called
+            called, log, path = self.called, self._calls_log, self.path
 
             def f(*a, **kw):
-                called.add(name)
+                if name not in called:
+                    called.add(name)
+                    if log:
+                        with open(log, "a") as fh:
+                            fh.write("%s\t%s\n" % (path, name))
                 return raw(*a, **kw)
             f.__name__ = str(name)
             f.raw = raw

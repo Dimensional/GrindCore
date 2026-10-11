@@ -39,7 +39,10 @@ comparisons against official libraries skip, each giving its reason.
 
 - `gcnative/` loads the library:
   - prototypes for every export, and `ctypes.Structure` classes for the structs callers allocate;
-  - call recording (export coverage), `symbol_report()` and `layout_report()`;
+  - call recording (export coverage), `symbol_report()` and `layout_report()`. The runner ends with
+    `export coverage: N of M exports present here were called`, and names the rest when there are 20 or fewer.
+    Child processes count too: the runner sets `GCNATIVE_CALLS` to a file, and every library loaded with that set
+    appends each export's first call to it before making the call, so a probe that crashes still counts;
   - `alloc()` for structs that need more alignment than ctypes gives (`CBlake2sp`: 64).
 - `gcnative/_spec.py` is **generated**; don't edit it. `python gen_bindings.py [--db codemap.db]` writes it from the
   code map (the workspace's `tools/codemap`; by default its `out/codemap.db`, with GrindCore checked out as the
@@ -100,10 +103,12 @@ below, keep the references, and run each Linux RID in the image GrindCore.build 
   GrindCore.build's `init-compiler.sh` does: the newest `clang-N`.
 - **linux-x86:** build the references with `--cflags="-msse2 -mfpmath=sse"`, as GrindCore.build builds linux-x86.
   x87 references differ in Brotli Q10/11 and zstd 1.5.2 L5/L9.
-- **Legacy (CentOS 7):** only 7-Zip's reference builds there. On the arm64 one, pass
-  `--cc /opt/rh/devtoolset-8/root/usr/bin/gcc`: CentOS's gcc 4.8.5 can't compile `CpuArch.c`, and devtoolset-11 is empty.
-- **Windows:** `build_7zip_ref.py` uses MSVC through vswhere (`--arch x86/arm64`). zstd's comparisons use Python
-  3.14's `compression.zstd` (1.5.7) there.
+- **Legacy (CentOS 7):** 7-Zip's, zstd's and LZ4's references build in the legacy images (since 2026-10-10;
+  references built elsewhere need a newer glibc). On the arm64 one, pass `--cc /opt/rh/devtoolset-8/root/usr/bin/gcc`:
+  CentOS's gcc 4.8.5 can't compile 7-Zip's `CpuArch.c`, and devtoolset-11 is empty.
+- **Windows:** `build_7zip_ref.py`, `build_zstd_ref.py` and `build_lz4_ref.py` use MSVC through vswhere
+  (`ref/msvc.py`; `--arch x64/x86/arm64`, cross-compiling arm64 on an x64 host). Each DLL exports, through a `.def`,
+  exactly the functions the tests bind (`REF_FUNCTIONS` in `gctest/zstd_util.py` and `gctest/lz4_util.py`).
 
 ## The vendored libraries' own test suites (`ref/upstream_tests.py`)
 
@@ -154,7 +159,9 @@ covered (the suites are make- and shell-based); the native suite covers Windows.
   freed memory. That access violation looks like a decoder bug. On Windows, ctypes turns a native access violation into
   `OSError: exception: access violation`, so crash probes check for that as well as a signal.
 - **Calling conventions:** on win-x86, callbacks the vendored code declares without a convention are `__stdcall`
-  (`/Gz`): zstd seekable's read/seek and Brotli's allocator. Probe per library (`WINFUNCTYPE` vs `CFUNCTYPE`).
+  (`/Gz`): zstd seekable's read/seek, Brotli's allocator, and 7-Zip's `ISeqInStream`/`ISeqOutStream`/
+  `ICompressProgress`. Probe per library (`WINFUNCTYPE` vs `CFUNCTYPE`). The official references are built with
+  MSVC's default (`/Gd`), so theirs are `__cdecl`.
 - **zstd:**
   - `DecompressStream` holds back a frame's last input byte until the output is flushed, then returns 1 for it, so
     a drain loop must re-supply the unconsumed tail;

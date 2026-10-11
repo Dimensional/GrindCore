@@ -394,6 +394,49 @@ class Lz4Tests(unittest.TestCase):
         if rc != 0 or json.loads(out.strip().splitlines()[-1]) != {"same next block": True}:
             known(self, "lz4-transfer-adopts")
 
+    def test_reset_and_flush_start_an_independent_block(self):
+        """ResetStream and Flush both call LZ4_resetStream_fast on the stream's compressor, so the next block on that
+        stream has no history: it must decode on its own, where without either it refers back to the previous block.
+        The output is official LZ4's for the same calls, where present. On a Stream without state (never initialised,
+        or after End) Flush returns ERROR and ResetStream does nothing. GetCurrentLZ4Stream returns the state's
+        LZ4_stream_t, or NULL without one."""
+        self.need("ResetStream", "Flush")
+        L, data = self.L, sample.text(20000, seed=91)
+        for how in ("neither", "ResetStream", "Flush"):
+            with self.subTest(reset=how):
+                enc = self.z.linked_encoder()
+                try:
+                    enc.compress(data)
+                    if how == "ResetStream":
+                        L.SZ_Lz4_v1_10_0_ResetStream(ctypes.byref(enc.s))
+                    elif how == "Flush":
+                        self.assertEqual(L.SZ_Lz4_v1_10_0_Flush(ctypes.byref(enc.s)), Z.OK)
+                    r, block = enc.compress(data)
+                finally:
+                    enc.close()
+                self.assertGreater(r, 0)
+                if how == "neither":        # the same data again: it's one match back into the first block
+                    with self.assertRaises(LZ4FormatError):
+                        decompress_block(block)
+                    continue
+                self.assertEqual(decompress_block(block), data, "independent decoder, no history")
+                if self.ref:
+                    official = self.ref.linked_encoder()
+                    try:
+                        official.compress(data)
+                        self.ref.dll.LZ4_resetStream_fast(official.s)
+                        self.assertEqual((r, block), official.compress(data), "official LZ4, same calls")
+                    finally:
+                        official.close()
+        s = L.struct.SZ_Lz4_v1_10_0_Stream()
+        self.assertEqual(L.SZ_Lz4_v1_10_0_Flush(ctypes.byref(s)), Z.ERROR)
+        L.SZ_Lz4_v1_10_0_ResetStream(ctypes.byref(s))
+        self.assertIsNone(L.SZ_Lz4_v1_10_0_GetCurrentLZ4Stream(ctypes.byref(s)))
+        s = self.z.stream()
+        self.assertEqual(L.SZ_Lz4_v1_10_0_GetCurrentLZ4Stream(ctypes.byref(s)), s.internalState)
+        self.z.end(s)
+        self.assertIsNone(L.SZ_Lz4_v1_10_0_GetCurrentLZ4Stream(ctypes.byref(s)), "End clears the state")
+
     def test_stream_functions_check_their_state(self):
         """After End (or before Init) a Stream's state is NULL. The stream functions must return an error then, as
         Flush and ResetStream do, rather than pass NULL to LZ4. Runs in a child."""

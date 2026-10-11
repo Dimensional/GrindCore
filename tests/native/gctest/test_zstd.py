@@ -503,6 +503,42 @@ class _ZStdTests(object):
                     finally:
                         s.close()
 
+    def test_seekable_end_frame_sets_frame_boundaries(self):
+        """Seekable_EndFrame (GrindCore.net's ZStdSeekableEncoder.EndFrame) ends the frame being written, and the next
+        one starts there. Between the caller's ends, frames still end at the maximum frame size, inside
+        CompressStream, as soon as they reach it. endFrame logs a frame even when it's empty (zstdseek_compress.c
+        endFrame, the same in both releases), so an EndFrame straight after one of those writes an empty frame,
+        recorded with size 0. EndStream doesn't (GrindCore's endStream rule, expected_frames). Each frame decodes on
+        its own to its part of the data."""
+        data, frame = sample.mixed(50000, seed=31), 4096
+
+        def sizes(ends):
+            out, start = [], 0
+            for cut in sorted(ends) + [len(data)]:
+                full, rest = divmod(cut - start, frame)
+                out += [frame] * full + ([rest] if rest or cut != len(data) else [])
+                start = cut
+            return out
+
+        for ends in ((), (1000,), (1000, 5000, 20000), (4096, 8192), (49000,)):
+            with self.subTest(end_frame_at=ends):
+                # drive() ends frames on step boundaries only, so the step divides every end
+                stream = self.seek_encode(data, frame=frame, step=8, end_frame_at=set(ends))
+                n, desc = struct.unpack("<IB", stream[-9:-4])
+                size = 12 if desc >> 7 else 8
+                table = stream[-9 - n * size:-9]
+                got = [struct.unpack("<I", table[k * size + 4:k * size + 8])[0] for k in range(n)]
+                self.assertEqual(got, sizes(ends), "decompressed size per frame, from the seek table")
+                s = self.z.seekable(stream)
+                try:
+                    self.assertEqual(s.frames(), n)
+                    pos = 0
+                    for k, want in enumerate(got):
+                        self.assertEqual(s.frame(k, want), (want, data[pos:pos + want]), "frame %d" % k)
+                        pos += want
+                finally:
+                    s.close()
+
     def test_seekable_output_matches_official(self):
         self.need_ref()
         for n, frame, step, ends in ((0, 4096, 5000, ()), (1, 4096, 5000, ()), (4096, 4096, 5000, ()),
@@ -619,6 +655,115 @@ class _ZStdTests(object):
                 self.assertEqual(not self.z.is_error(enc.init_result), ok, "maxFrameSize %d" % size)
             finally:
                 enc.close()
+
+    def patched(self, stream, frame, csize=None, dsize=None):
+        """`stream` with seek-table entry `frame`'s compressed and/or decompressed size replaced."""
+        n, desc = struct.unpack("<IB", stream[-9:-4])
+        size = 12 if desc >> 7 else 8
+        at = len(stream) - 9 - n * size + frame * size
+        out = bytearray(stream)
+        if csize is not None:
+            struct.pack_into("<I", out, at, csize)
+        if dsize is not None:
+            struct.pack_into("<I", out, at + 4, dsize)
+        return bytes(out)
+
+    def test_seekable_table_checks(self):
+        """GrindCore's PAL checks the seek table zstd has just loaded (audit/other-codecs.md 4.8.2), the same way on
+        every RID. Each check is tried just inside its limit (accepted) and just outside (rejected), through
+        InitBuff and through callbacks (GrindCore.net's stream decoder):
+          G1: no entry size within zstd's error-code range below 4 GiB: 32-bit GetFrame*Size would return such a size
+              as an error code. The limit, 2^32 - ZSTD_error_maxCode, is worked out from IsError;
+          G2: no frame claiming more data than its compressed bytes can hold, 128 KiB per 4 bytes (an RLE block);
+          G3: InitBuff only, where the source's size is known: the frames end before the seek table.
+        A table that fails gives corruption_detected, and the context then refuses every call."""
+        bits = 8 * ctypes.sizeof(ctypes.c_size_t)
+        k = next(k for k in range(1, 1 << 16) if not self.z.is_error((1 << bits) - k))   # = ZSTD_error_maxCode
+        limit = (1 << 32) - k
+        stream = self.seek_encode(sample.text(12000, seed=3), frame=4000)                  # 3 frames, checksums
+        n = struct.unpack("<I", stream[-9:-5])[0]
+        c1 = struct.unpack_from("<I", stream, len(stream) - 9 - n * 12 + 12)[0]           # frame 1's compressed size
+        big_c = 4 * ((1 << 32) // (128 << 10))      # just enough compressed bytes for G2 to allow 4 GiB
+        cases = [  # (label, compressed size, decompressed size, accepted by InitBuff, accepted through callbacks)
+            ("as written", None, None, True, True),
+            ("G1, compressed size at the limit", limit, None, False, True),        # InitBuff: G3
+            ("G1, compressed size one past", limit + 1, None, False, False),
+            ("G1, decompressed size at the limit", big_c, limit, False, True),     # InitBuff: G3
+            ("G1, decompressed size one past", big_c, limit + 1, False, False),
+            ("G2, at 128 KiB per 4 bytes", None, c1 // 4 * (128 << 10), True, True),
+            ("G2, one past", None, c1 // 4 * (128 << 10) + 1, False, False),
+            ("G3, frames end a byte before the table", c1 - 1, None, True, True),
+            ("G3, frames run a byte into the table", c1 + 1, None, False, True),
+        ]
+        got, want = {}, {}
+        for label, cs, ds, buff_ok, cb_ok in cases:
+            raw = self.patched(stream, 1, cs, ds)
+            for callbacks, ok in ((False, buff_ok), (True, cb_ok)):
+                key = (label, "callbacks" if callbacks else "InitBuff")
+                s = self.z.seekable(raw, callbacks=callbacks)
+                try:
+                    accepted = not self.z.is_error(s.init)
+                    if not accepted:    # zstd's loader checks no sizes, so this is the PAL: then nothing works
+                        dst = ctypes.create_string_buffer(64)
+                        after = (self.z.error_name(s.init), s.frames(), self.z.is_error(s.f("Decompress", dst, 64, 0)))
+                        self.assertEqual(after, ("Data corruption detected", 0, True), key)
+                finally:
+                    s.close()
+                got[key], want[key] = accepted, ok
+        guard_only = [key for key in want if not want[key] and key[0] != "as written"]
+        if all(got[key] for key in guard_only):
+            known(self, "zstd-seekable-table-unchecked")
+        self.assertEqual(got, want)
+
+    def test_seekable_beyond_4_gib(self):
+        """Offsets past 2^32: the format's offsets are 64-bit, its entries' sizes 32-bit, and on 32-bit RIDs this is
+        where a truncated offset would show. 4.5 GiB of zeros with each MiB starting with its own 8-byte offset, at
+        the release's largest frame, read around and past 4 GiB (about 200 KB compressed; 5 s per version on the
+        PC)."""
+        mib, total = 1 << 20, 9 << 29
+        enc = self.z.seekable_encoder(1, 1, Z.MAX_FRAME[self.VERSION])
+        src, cap = ctypes.create_string_buffer(mib), 1 << 17
+        dst, out = ctypes.create_string_buffer(cap), bytearray()
+        try:
+            for m in range(total // mib):
+                struct.pack_into("<Q", src, 0, m * mib)
+                pos = 0
+                while pos < mib:
+                    r, i, o = enc.call(Z.CONTINUE, dst, cap, ctypes.addressof(src) + pos, mib - pos)
+                    self.assertFalse(self.z.is_error(r), self.z.error_name(r) if self.z.is_error(r) else "")
+                    out += dst.raw[:o]
+                    pos += i
+            while True:
+                r, _, o = enc.call(Z.END, dst, cap, 0, 0)
+                self.assertFalse(self.z.is_error(r))
+                out += dst.raw[:o]
+                if r == 0:
+                    break
+        finally:
+            enc.close()
+
+        def expect(off, n):
+            want = bytearray(n)
+            for m in range(off // mib, (off + n - 1) // mib + 1):
+                for j, b in enumerate(struct.pack("<Q", m * mib)):
+                    if 0 <= m * mib + j - off < n:
+                        want[m * mib + j - off] = b
+            return bytes(want)
+
+        frame = Z.MAX_FRAME[self.VERSION]
+        s = self.z.seekable(bytes(out))
+        try:
+            self.assertFalse(self.z.is_error(s.init), self.z.error_name(s.init))
+            self.assertEqual((s.frames(), s.size()), (total // frame + (1 if total % frame else 0), total))
+            self.assertEqual(s.f("GetFrameDecompressedOffset", s.frames() - 1), (s.frames() - 1) * frame)
+            self.assertEqual(s.f("OffsetToFrameIndex", (1 << 32) + 5), (1 << 32) // frame)
+            for off, n in (((1 << 32) - 4, 12), (1 << 32, 16), ((1 << 32) + 3 * mib - 3, 11), (total - 16, 16)):
+                self.assertEqual(s.read(off, n), (n, expect(off, n)), "read at %#x" % off)
+            self.assertEqual(s.read(total - 8, 100), (8, expect(total - 8, 8)), "the clamped read at the end")
+        finally:
+            s.close()
+        print("  %s: 4.5 GiB in %d frames, %d bytes compressed; reads past 4 GiB correct" % (
+            self.VERSION, total // frame + (1 if total % frame else 0), len(out)))
 
     def test_seekable_rejects_oversized_frame_count(self):
         """Upstream (open PRs #4685, #4717): loadSeekTable never bounds the footer's Number_Of_Frames by

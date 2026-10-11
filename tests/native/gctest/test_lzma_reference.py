@@ -29,6 +29,16 @@ def corpus():
             ("256 KiB zeros", bytes(256 << 10)), ("2.6 MiB mixed", mixed)]
 
 
+# Exported by references built since 2026-10-10. Off Windows every global symbol is exported anyway; on Windows an older
+# lib7zref lacks them (its .def is ref/build_7zip_ref.py's EXPORTS), so they're None there and the tests skip.
+NEWER = ("LzmaEnc_Encode", "Lzma2Enc_SetDataSize")
+
+
+def need_newer(test, R, name):
+    if getattr(R, name) is None:
+        test.skipTest("this lib7zref doesn't export %s: rebuild it with ref/build_7zip_ref.py" % name)
+
+
 class Ref(object):
     """Official 7-Zip's functions, by their own names."""
 
@@ -44,11 +54,16 @@ class Ref(object):
                 ("LzmaEnc_Create", vp, [vp]), ("LzmaEnc_Destroy", None, [vp, vp, vp]), ("LzmaEnc_SetProps", ctypes.c_int, [vp, vp]),
                 ("LzmaEnc_SetDataSize", None, [vp, ctypes.c_uint64]), ("LzmaEnc_WriteProperties", ctypes.c_int, [vp, vp, vp]),
                 ("LzmaEnc_MemEncode", ctypes.c_int, [vp, vp, vp, vp, sz, ctypes.c_int, vp, vp, vp]),
+                ("LzmaEnc_Encode", ctypes.c_int, [vp, vp, vp, vp, vp, vp]),
                 ("Lzma2EncProps_Init", None, [vp]), ("Lzma2EncProps_Normalize", None, [vp]),
                 ("Lzma2Enc_Create", vp, [vp, vp]), ("Lzma2Enc_Destroy", None, [vp]), ("Lzma2Enc_SetProps", ctypes.c_int, [vp, vp]),
+                ("Lzma2Enc_SetDataSize", None, [vp, ctypes.c_uint64]),
                 ("Lzma2Enc_WriteProperties", ctypes.c_ubyte, [vp]), ("Lzma2Enc_Encode2", ctypes.c_int, [vp, vp, vp, vp, vp, vp, sz, vp]),
                 ("LzmaDecode", ctypes.c_int, [vp, vp, vp, vp, vp, ctypes.c_uint, ctypes.c_int, vp, vp]),
                 ("Lzma2Decode", ctypes.c_int, [vp, vp, vp, vp, ctypes.c_ubyte, ctypes.c_int, vp, vp])]:
+            if name in NEWER and not hasattr(r, name):
+                setattr(self, name, None)
+                continue
             fn = getattr(r, name)
             fn.restype, fn.argtypes = res, args
             setattr(self, name, fn)
@@ -121,7 +136,8 @@ class Reference(unittest.TestCase):
             res.append((rc, pe.raw[:pn.value], dst.raw[:dlen.value]))
         return res
 
-    def lzma2_encode2(self, data, level, threads, block):
+    def lzma2_encode2(self, data, level, threads, block, data_size=False):
+        """data_size: SetDataSize(len(data)) after SetProps, as Lzma2Block does (Lzma2Block.cs:137)."""
         res = []
         for side in ("gc", "ref"):
             p = self.L.struct.CLzma2EncProps()
@@ -135,12 +151,16 @@ class Reference(unittest.TestCase):
             if side == "gc":
                 enc = self.L.SZ_Lzma2_v25_01_Enc_Create()
                 self.L.SZ_Lzma2_v25_01_Enc_SetProps(enc, ctypes.byref(p))
+                if data_size:
+                    self.L.SZ_Lzma2_v25_01_Enc_SetDataSize(enc, len(data))
                 prop = self.L.SZ_Lzma2_v25_01_Enc_WriteProperties(enc)
                 rc = self.L.SZ_Lzma2_v25_01_Enc_Encode2(enc, dst, ctypes.byref(dlen), data, len(data), None)
                 self.L.SZ_Lzma2_v25_01_Enc_Destroy(enc)
             else:
                 enc = self.R.Lzma2Enc_Create(self.R.alloc, self.R.big)
                 self.R.Lzma2Enc_SetProps(enc, ctypes.byref(p))
+                if data_size:
+                    self.R.Lzma2Enc_SetDataSize(enc, len(data))
                 prop = self.R.Lzma2Enc_WriteProperties(enc)
                 rc = self.R.Lzma2Enc_Encode2(enc, None, dst, ctypes.byref(dlen), None, data, len(data), None)
                 self.R.Lzma2Enc_Destroy(enc)
@@ -169,6 +189,13 @@ class Reference(unittest.TestCase):
 
     def test_lzma2_encode2_is_identical(self):
         self.compare("Lzma2Enc_Encode2", [(lv, 1, 0) for lv in LEVELS] + [(lv, 2, 1 << 20) for lv in (1, 5, 9)],
+                     self.lzma2_encode2)
+
+    def test_lzma2_block_sequence_is_identical(self):
+        """Lzma2Block's own calls, SetDataSize included (Lzma2Block.cs:128-146)."""
+        need_newer(self, self.R, "Lzma2Enc_SetDataSize")
+        self.compare("Lzma2Enc_Encode2 after SetDataSize (Lzma2Block)",
+                     [(lv, 1, 0, True) for lv in (1, 5, 9)] + [(lv, 2, 1 << 20, True) for lv in (1, 5, 9)],
                      self.lzma2_encode2)
 
     def test_randomized_cases_are_identical(self):

@@ -4,11 +4,14 @@ versions GrindCore vendors, 1.5.2 and 1.5.7) as small shared libraries: the refe
 The tarball comes from github.com/facebook/zstd's release page and is checked against the SHA-256 file published
 beside it. lib/common, lib/compress, lib/decompress and contrib/seekable_format/zstdseek_*.c are compiled unmodified
 with the system C compiler, with the multithreading and namespace settings of zstd's own lib/Makefile. The assembly
-Huffman decoder is left out (ZSTD_DISABLE_ASM, as GrindCore builds it); it changes speed, never output. Unix and macOS;
-stdlib only, Python 3.6+.
+Huffman decoder is left out (ZSTD_DISABLE_ASM, as GrindCore builds it); it changes speed, never output. Unix, macOS,
+and Windows with MSVC (msvc.py: --arch x64/x86/arm64, default this machine's); stdlib only, Python 3.6+.
 
-  python3 build_zstd_ref.py [--version 1.5.7 ...] [--out DIR] [--cc cc] [--cflags "..."] [--tarballs DIR]
-  -> DIR/libzstdref-<version>.so (.dylib on macOS). Point GC_REF_ZSTD at DIR and run: python3 -m gctest --lib ... -k ZStd
+  python3 build_zstd_ref.py [--version 1.5.7 ...] [--out DIR] [--cc cc] [--cflags "..."] [--tarballs DIR] [--arch A]
+  -> DIR/libzstdref-<version>.so (.dylib on macOS, .dll on Windows). Point GC_REF_ZSTD at DIR and run:
+     python3 -m gctest --lib ... -k ZStd
+
+On Windows the DLL exports exactly the functions the tests bind (gctest/zstd_util.py REF_FUNCTIONS), through a .def.
 
 For osx-x64 on Apple Silicon, cross-compile natively with --cflags "-arch x86_64": the Command Line Tools' xcrun is
 arm64-only, so cc can't run under Rosetta (arch -x86_64).
@@ -23,6 +26,10 @@ import sys
 import tarfile
 import urllib.request
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # embeddable Pythons leave it off
+import msvc  # noqa: E402
+
+HERE = os.path.dirname(os.path.abspath(__file__))
 URL = "https://github.com/facebook/zstd/releases/download/v%s/zstd-%s.tar.gz"
 
 
@@ -43,6 +50,22 @@ def fetch(version, out, tarballs):
     return path
 
 
+def build_windows(a, version, sources, includes, dll):
+    sys.path.insert(0, os.path.dirname(HERE))       # tests/native, for gctest's list of the functions the tests bind
+    from gctest.zstd_util import REF_FUNCTIONS
+    names = [os.path.basename(f) for f in sources]
+    if len(set(names)) != len(names):
+        sys.exit("zstd %s: two sources share a file name, so their objects would collide" % version)
+    work = dll + ".work"
+    os.makedirs(work, exist_ok=True)
+    msvc.write_def(os.path.join(work, "ref.def"), [n for n, _, _ in REF_FUNCTIONS])
+    cl = 'cl /nologo /c /O2 /Oi /Gy /MT /DNDEBUG /W3 /DZSTD_MULTITHREAD /DXXH_NAMESPACE=ZSTD_ /DZSTD_DISABLE_ASM %s%s %s' % (
+        " ".join('/I"%s"' % d for d in includes), " " + a.cflags if a.cflags else "",
+        " ".join('"%s"' % f for f in sources))
+    objs = " ".join(os.path.splitext(n)[0] + ".obj" for n in names)
+    msvc.run(msvc.arch_name(a.arch), [cl, 'link /nologo /DLL /DEF:ref.def /OUT:"%s" %s' % (dll, objs)], work)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--version", action="append", help="repeatable; default 1.5.2 and 1.5.7")
@@ -50,6 +73,7 @@ def main():
     ap.add_argument("--cc", default=os.environ.get("CC", "cc"))
     ap.add_argument("--cflags", default="", help='extra compiler flags, e.g. "-arch x86_64" or "-m32"')
     ap.add_argument("--tarballs", help="a folder that may already hold zstd-<version>.tar.gz")
+    ap.add_argument("--arch", choices=("x64", "x86", "arm64"), help="Windows: the target (default: this machine)")
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
     for version in a.version or ["1.5.2", "1.5.7"]:
@@ -64,6 +88,11 @@ def main():
         sources = sorted(glob.glob(os.path.join(lib, "common", "*.c")) + glob.glob(os.path.join(lib, "compress", "*.c")) +
                          glob.glob(os.path.join(lib, "decompress", "*.c")) +
                          [os.path.join(seek, "zstdseek_compress.c"), os.path.join(seek, "zstdseek_decompress.c")])
+        if sys.platform == "win32":
+            dll = os.path.join(a.out, "libzstdref-%s.dll" % version)
+            build_windows(a, version, sources, [lib, os.path.join(lib, "common"), seek], dll)
+            print(dll)
+            continue
         so = os.path.join(a.out, "libzstdref-%s%s" % (version, ".dylib" if sys.platform == "darwin" else ".so"))
         cmd = [a.cc] + shlex.split(a.cflags) + [
                "-O2", "-fPIC", "-dynamiclib" if sys.platform == "darwin" else "-shared", "-o", so,

@@ -301,35 +301,40 @@ def reference(version):
     return Ref(path, version) if os.path.exists(path) else None
 
 
+# Every official function the tests call. ref/build_zstd_ref.py exports exactly these from its Windows DLLs (MSVC
+# needs a .def); off Windows every global symbol is exported anyway.
+REF_FUNCTIONS = [
+    ("ZSTD_versionNumber", u32, []), ("ZSTD_isError", u32, [sz]), ("ZSTD_getErrorName", ctypes.c_char_p, [sz]),
+    ("ZSTD_createCCtx", vp, []), ("ZSTD_freeCCtx", sz, [vp]),
+    ("ZSTD_compressCCtx", sz, [vp, vp, sz, vp, sz, i32]),
+    ("ZSTD_CCtx_setParameter", sz, [vp, i32, i32]), ("ZSTD_CCtx_refCDict", sz, [vp, vp]),
+    ("ZSTD_compressStream2", sz, [vp, ctypes.POINTER(_Out), ctypes.POINTER(_In), i32]),
+    ("ZSTD_createCDict", vp, [vp, sz, i32]), ("ZSTD_freeCDict", sz, [vp]),
+    ("ZSTD_createCCtxParams", vp, []), ("ZSTD_freeCCtxParams", sz, [vp]),
+    ("ZSTD_CCtxParams_init", sz, [vp, i32]), ("ZSTD_CCtxParams_setParameter", sz, [vp, i32, i32]),
+    ("ZSTD_createCDict_advanced2", vp, [vp, sz, i32, i32, vp, _CMem]),
+    ("ZSTD_compress_usingCDict", sz, [vp, vp, sz, vp, sz, vp]),
+    ("ZSTD_decompress", sz, [vp, sz, vp, sz]),
+    ("ZSTD_CStreamInSize", sz, []), ("ZSTD_CStreamOutSize", sz, []),
+    ("ZSTD_writeSkippableFrame", sz, [vp, sz, vp, sz, u32]),
+    ("ZSTD_seekable_createCStream", vp, []), ("ZSTD_seekable_freeCStream", sz, [vp]),
+    ("ZSTD_seekable_initCStream", sz, [vp, i32, i32, u32]),
+    ("ZSTD_seekable_compressStream", sz, [vp, ctypes.POINTER(_Out), ctypes.POINTER(_In)]),
+    ("ZSTD_seekable_endFrame", sz, [vp, ctypes.POINTER(_Out)]),
+    ("ZSTD_seekable_endStream", sz, [vp, ctypes.POINTER(_Out)]),
+    ("ZSTD_seekable_create", vp, []), ("ZSTD_seekable_free", sz, [vp]),
+    ("ZSTD_seekable_initBuff", sz, [vp, vp, sz]),
+    ("ZSTD_seekable_decompress", sz, [vp, vp, sz, ctypes.c_ulonglong]),
+    ("ZSTD_seekable_getNumFrames", u32, [vp])]
+
+
 class Ref(object):
     """Official zstd and its seekable contrib, by their own names."""
 
     def __init__(self, path, version):
         r = self.dll = ctypes.CDLL(path)
         self.version, self.path = version, path
-        for name, res, args in [
-                ("ZSTD_versionNumber", u32, []), ("ZSTD_isError", u32, [sz]), ("ZSTD_getErrorName", ctypes.c_char_p, [sz]),
-                ("ZSTD_createCCtx", vp, []), ("ZSTD_freeCCtx", sz, [vp]),
-                ("ZSTD_compressCCtx", sz, [vp, vp, sz, vp, sz, i32]),
-                ("ZSTD_CCtx_setParameter", sz, [vp, i32, i32]), ("ZSTD_CCtx_refCDict", sz, [vp, vp]),
-                ("ZSTD_compressStream2", sz, [vp, ctypes.POINTER(_Out), ctypes.POINTER(_In), i32]),
-                ("ZSTD_createCDict", vp, [vp, sz, i32]), ("ZSTD_freeCDict", sz, [vp]),
-                ("ZSTD_createCCtxParams", vp, []), ("ZSTD_freeCCtxParams", sz, [vp]),
-                ("ZSTD_CCtxParams_init", sz, [vp, i32]), ("ZSTD_CCtxParams_setParameter", sz, [vp, i32, i32]),
-                ("ZSTD_createCDict_advanced2", vp, [vp, sz, i32, i32, vp, _CMem]),
-                ("ZSTD_compress_usingCDict", sz, [vp, vp, sz, vp, sz, vp]),
-                ("ZSTD_decompress", sz, [vp, sz, vp, sz]),
-                ("ZSTD_CStreamInSize", sz, []), ("ZSTD_CStreamOutSize", sz, []),
-                ("ZSTD_writeSkippableFrame", sz, [vp, sz, vp, sz, u32]),
-                ("ZSTD_seekable_createCStream", vp, []), ("ZSTD_seekable_freeCStream", sz, [vp]),
-                ("ZSTD_seekable_initCStream", sz, [vp, i32, i32, u32]),
-                ("ZSTD_seekable_compressStream", sz, [vp, ctypes.POINTER(_Out), ctypes.POINTER(_In)]),
-                ("ZSTD_seekable_endFrame", sz, [vp, ctypes.POINTER(_Out)]),
-                ("ZSTD_seekable_endStream", sz, [vp, ctypes.POINTER(_Out)]),
-                ("ZSTD_seekable_create", vp, []), ("ZSTD_seekable_free", sz, [vp]),
-                ("ZSTD_seekable_initBuff", sz, [vp, vp, sz]),
-                ("ZSTD_seekable_decompress", sz, [vp, vp, sz, ctypes.c_ulonglong]),
-                ("ZSTD_seekable_getNumFrames", u32, [vp])]:
+        for name, res, args in REF_FUNCTIONS:
             fn = getattr(r, name)
             fn.restype, fn.argtypes = res, args
             setattr(self, name[5:], fn)

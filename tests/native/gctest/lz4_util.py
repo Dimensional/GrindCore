@@ -309,28 +309,33 @@ def reference(version="1.10.0"):
     return Ref(path, version) if os.path.exists(path) else None
 
 
+# Every official function the tests call. ref/build_lz4_ref.py exports exactly these from its Windows DLL (MSVC needs
+# a .def); off Windows every global symbol is exported anyway.
+_vp, _sz, _i, _ci = ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int, ctypes.c_char_p
+REF_FUNCTIONS = [
+    ("LZ4_createStream", _vp, []), ("LZ4_freeStream", _i, [_vp]), ("LZ4_resetStream_fast", None, [_vp]),
+    ("LZ4_compress_fast_continue", _i, [_vp, _vp, _vp, _i, _i, _i]),
+    ("LZ4_loadDict", _i, [_vp, _vp, _i]), ("LZ4_saveDict", _i, [_vp, _vp, _i]),
+    ("LZ4_attach_dictionary", None, [_vp, _vp]),
+    ("LZ4_compress_HC", _i, [_vp, _vp, _i, _i, _i]),
+    ("LZ4_compress_HC_extStateHC", _i, [_vp, _vp, _vp, _i, _i, _i]),
+    ("LZ4_compress_HC_destSize", _i, [_vp, _vp, _vp, _vp, _i, _i]),
+    ("LZ4_compress_destSize", _i, [_vp, _vp, _vp, _i]),
+    ("LZ4_decompress_safe", _i, [_vp, _vp, _i, _i]),
+    ("LZ4F_createCompressionContext", _sz, [_vp, ctypes.c_uint]), ("LZ4F_freeCompressionContext", _sz, [_vp]),
+    ("LZ4F_compressBegin", _sz, [_vp, _vp, _sz, _vp]), ("LZ4F_compressUpdate", _sz, [_vp, _vp, _sz, _vp, _sz, _vp]),
+    ("LZ4F_flush", _sz, [_vp, _vp, _sz, _vp]), ("LZ4F_compressEnd", _sz, [_vp, _vp, _sz, _vp]),
+    ("LZ4F_compressBound", _sz, [_sz, _vp]), ("LZ4F_compressFrameBound", _sz, [_sz, _vp]),
+    ("LZ4F_getErrorName", _ci, [_sz])]
+
+
 class Ref(object):
     """Official LZ4 by its own names, with the same call sequences as the PAL."""
 
     def __init__(self, path, version):
         d = self.dll = ctypes.CDLL(path)
         self.version, self.path = version, path
-        vp, sz, i, ci = ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int, ctypes.c_char_p
-        for name, res, args in (
-                ("LZ4_createStream", vp, []), ("LZ4_freeStream", i, [vp]),
-                ("LZ4_compress_fast_continue", i, [vp, vp, vp, i, i, i]),
-                ("LZ4_loadDict", i, [vp, vp, i]), ("LZ4_saveDict", i, [vp, vp, i]),
-                ("LZ4_attach_dictionary", None, [vp, vp]),
-                ("LZ4_compress_HC", i, [vp, vp, i, i, i]),
-                ("LZ4_compress_HC_extStateHC", i, [vp, vp, vp, i, i, i]),
-                ("LZ4_compress_HC_destSize", i, [vp, vp, vp, vp, i, i]),
-                ("LZ4_compress_destSize", i, [vp, vp, vp, i]),
-                ("LZ4_decompress_safe", i, [vp, vp, i, i]),
-                ("LZ4F_createCompressionContext", sz, [vp, ctypes.c_uint]), ("LZ4F_freeCompressionContext", sz, [vp]),
-                ("LZ4F_compressBegin", sz, [vp, vp, sz, vp]), ("LZ4F_compressUpdate", sz, [vp, vp, sz, vp, sz, vp]),
-                ("LZ4F_flush", sz, [vp, vp, sz, vp]), ("LZ4F_compressEnd", sz, [vp, vp, sz, vp]),
-                ("LZ4F_compressBound", sz, [sz, vp]), ("LZ4F_compressFrameBound", sz, [sz, vp]),
-                ("LZ4F_getErrorName", ci, [sz])):
+        for name, res, args in REF_FUNCTIONS:
             fn = getattr(d, name)
             fn.restype, fn.argtypes = res, args
 

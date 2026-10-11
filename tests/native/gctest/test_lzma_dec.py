@@ -259,6 +259,34 @@ class LzmaDecTests(unittest.TestCase):
                 self.A.free("lzma2", d)
         self.assertEqual(D.one_shot(self.A, "lzma2", 40, b"\x00", 10)[:2], (0, D.FINISHED_WITH_MARK))
 
+    def test_free_probs_keeps_the_dictionary(self):
+        """Dec_FreeProbs frees only the probability table, Dec_Free that and the dictionary. So after FreeProbs a
+        decoder can take properties again with AllocateProbs and decode into the dictionary it kept (LzmaDec.h,
+        LzmaDec_FreeProbs/LzmaDec_AllocateProbs). LZMA and LZMA2, GrindCore and official 7-Zip alike."""
+        data = sample.text(30000, seed=8)
+        streams = [("lzma",) + D.gc_lzma(self.L, data, end_mark=1),
+                   ("lzma2",) + D.gc_lzma2_blocks(self.L, data, level=5, block=1 << 30, threads=1)]
+        for an, a in [("GrindCore", self.A)] + self.refs:
+            for kind, props, s in streams:
+                with self.subTest(decoder=an, kind=kind):
+                    d = a.new(kind)
+                    inner = d if kind == "lzma" else d.decoder
+                    self.assertEqual(a.allocate(kind, d, props), 0)
+                    dic, got = inner.dic, []
+                    for again in (False, True):
+                        if again:
+                            a.free(kind, d, probs_only=True)
+                            self.assertEqual((inner.probs, inner.dic), (None, dic), "FreeProbs keeps the dictionary")
+                            self.assertEqual(a.allocate(kind, d, props, probs_only=True), 0)
+                            self.assertEqual(inner.dic, dic)
+                        a.init(kind, d)
+                        dst = ctypes.create_string_buffer(len(data))
+                        rc, w, _, st = a.to_buf(kind, d, dst, len(data), s, len(s), D.FINISH_END)
+                        got.append((rc, st, dst.raw[:w] == data))
+                    a.free(kind, d)
+                    self.assertEqual((inner.probs, inner.dic), (None, None))
+                    self.assertEqual(got, [(0, D.FINISHED_WITH_MARK, True)] * 2)
+
     def test_lzma2_chunk_rules(self):
         """Lzma2Dec_UpdateState: the first chunk must reset the dictionary (control 1 or >= 0xE0); after an
         uncompressed reset an LZMA chunk must set new properties (>= 0xC0); control bytes 3-0x7F are invalid; a

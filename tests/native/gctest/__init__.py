@@ -100,6 +100,11 @@ KNOWN_DEFECTS = {
                                          "callback source, and a longer one overwrites the next frame's output "
                                          "unreported; fixed in both zstdseek_decompress.c copies on audit/native-fixes; "
                                          "audit/other-codecs.md 4.8.2",
+    "zstd-seekable-table-unchecked": "upstream loadSeekTable takes each entry's sizes as they are: a size within zstd's "
+                                     "error-code range below 4 GiB reads as an error code from 32-bit "
+                                     "GetFrame*Size, and a table may claim more data than its frames hold or place "
+                                     "frames past itself (a false GetDecompressedSize); checked in both seekable PALs "
+                                     "on audit/native-fixes; audit/other-codecs.md 4.8.2",
     "zstd-seekable-framesize-overread":"upstream getFrameDecompressedSize accepts frameIndex == frame count and "
                                         "reads one entry past the seek table; fixed in both copies on audit/native-fixes, as "
                                         "upstream PR #4758 (open); audit/other-codecs.md 4.8.2",

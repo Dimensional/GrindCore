@@ -4,6 +4,7 @@ import json
 import os
 import platform
 import sys
+import tempfile
 import time
 import unittest
 
@@ -29,14 +30,25 @@ def main():
     suite = unittest.defaultTestLoader.discover(HERE, pattern="test_*.py", top_level_dir=os.path.dirname(HERE))
     if a.pattern:
         suite = unittest.TestSuite(t for t in _flatten(suite) if any(p in t.id() for p in a.pattern))
+    # the child processes' calls count too: they record them in this file (gcnative.Library)
+    fd, calls_log = tempfile.mkstemp(prefix="gctest-calls-", suffix=".txt")
+    os.close(fd)
+    os.environ[gcnative.CALLS_ENV] = calls_log
     t0 = time.time()
-    result = unittest.TextTestRunner(verbosity=2 if a.verbose else 1, stream=sys.stdout).run(suite)
+    try:
+        result = unittest.TextTestRunner(verbosity=2 if a.verbose else 1, stream=sys.stdout).run(suite)
+        in_children = gcnative.read_calls(calls_log, gctest.LIB.path) - gctest.LIB.called
+    finally:
+        del os.environ[gcnative.CALLS_ENV]
+        os.remove(calls_log)
 
     lib = gctest.LIB
+    called = lib.called | in_children
     present = sorted(n for n in gcnative.EXPORTS if lib.has(n))
-    uncalled = [n for n in present if n not in lib.called]
-    print("export coverage: %d of %d exports present here were called; %d not yet" % (
-        len(present) - len(uncalled), len(present), len(uncalled)))
+    uncalled = [n for n in present if n not in called]
+    print("export coverage: %d of %d exports present here were called (%d only in child processes); %d not yet%s" % (
+        len(present) - len(uncalled), len(present), len(in_children & set(present)), len(uncalled),
+        (": " + ", ".join(uncalled)) if 0 < len(uncalled) <= 20 else ""))
     if a.json:
         with open(a.json, "w") as f:
             json.dump({
@@ -44,7 +56,8 @@ def main():
                 "platform": platform.platform(), "seconds": round(time.time() - t0, 1),
                 "tests": result.testsRun, "failures": [t.id() for t, _ in result.failures],
                 "errors": [t.id() for t, _ in result.errors], "skipped": [t.id() for t, _ in result.skipped],
-                "exports_present": len(present), "exports_called": sorted(lib.called), "exports_uncalled": uncalled,
+                "exports_present": len(present), "exports_called": sorted(called),
+                "exports_called_only_in_children": sorted(in_children), "exports_uncalled": uncalled,
             }, f, indent=1)
     return 0 if result.wasSuccessful() else 1
 

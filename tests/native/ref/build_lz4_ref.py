@@ -3,10 +3,14 @@ library: the reference for gctest/test_lz4.py.
 
 The tarball comes from github.com/lz4/lz4's release page and is checked against the SHA-256 file published beside it.
 lib/lz4.c, lz4hc.c, lz4frame.c and xxhash.c are compiled unmodified with the system C compiler, as GrindCore compiles
-them (no extra defines). Unix and macOS; stdlib only, Python 3.6+.
+them (no extra defines). Unix, macOS, and Windows with MSVC (msvc.py: --arch x64/x86/arm64, default this machine's);
+stdlib only, Python 3.6+.
 
-  python3 build_lz4_ref.py [--version 1.10.0] [--out DIR] [--cc cc] [--cflags "..."] [--tarballs DIR]
-  -> DIR/liblz4ref-<version>.so (.dylib on macOS). Point GC_REF_LZ4 at DIR and run: python3 -m gctest --lib ... -k Lz4
+  python3 build_lz4_ref.py [--version 1.10.0] [--out DIR] [--cc cc] [--cflags "..."] [--tarballs DIR] [--arch A]
+  -> DIR/liblz4ref-<version>.so (.dylib on macOS, .dll on Windows). Point GC_REF_LZ4 at DIR and run:
+     python3 -m gctest --lib ... -k Lz4
+
+On Windows the DLL exports exactly the functions the tests bind (gctest/lz4_util.py REF_FUNCTIONS), through a .def.
 
 For osx-x64 on Apple Silicon, cross-compile natively with --cflags "-arch x86_64" (the Command Line Tools' xcrun can't
 run under Rosetta); for a 32-bit Linux reference, build inside the i386 image.
@@ -20,6 +24,10 @@ import sys
 import tarfile
 import urllib.request
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # embeddable Pythons leave it off
+import msvc  # noqa: E402
+
+HERE = os.path.dirname(os.path.abspath(__file__))
 URL = "https://github.com/lz4/lz4/releases/download/v%s/lz4-%s.tar.gz"
 
 
@@ -40,6 +48,18 @@ def fetch(version, out, tarballs):
     return path
 
 
+def build_windows(a, sources, lib, dll):
+    sys.path.insert(0, os.path.dirname(HERE))       # tests/native, for gctest's list of the functions the tests bind
+    from gctest.lz4_util import REF_FUNCTIONS
+    work = dll + ".work"
+    os.makedirs(work, exist_ok=True)
+    msvc.write_def(os.path.join(work, "ref.def"), [n for n, _, _ in REF_FUNCTIONS])
+    cl = 'cl /nologo /c /O2 /Oi /Gy /MT /DNDEBUG /W3 /I"%s"%s %s' % (
+        lib, " " + a.cflags if a.cflags else "", " ".join('"%s"' % f for f in sources))
+    objs = " ".join(os.path.splitext(os.path.basename(f))[0] + ".obj" for f in sources)
+    msvc.run(msvc.arch_name(a.arch), [cl, 'link /nologo /DLL /DEF:ref.def /OUT:"%s" %s' % (dll, objs)], work)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--version", action="append", help="repeatable; default 1.10.0")
@@ -47,6 +67,7 @@ def main():
     ap.add_argument("--cc", default=os.environ.get("CC", "cc"))
     ap.add_argument("--cflags", default="", help='extra compiler flags, e.g. "-arch x86_64" or "-m32"')
     ap.add_argument("--tarballs", help="a folder that may already hold lz4-<version>.tar.gz")
+    ap.add_argument("--arch", choices=("x64", "x86", "arm64"), help="Windows: the target (default: this machine)")
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
     for version in a.version or ["1.10.0"]:
@@ -59,6 +80,11 @@ def main():
                     t.extractall(a.out)
         lib = os.path.join(src, "lib")
         sources = [os.path.join(lib, f) for f in ("lz4.c", "lz4hc.c", "lz4frame.c", "xxhash.c")]
+        if sys.platform == "win32":
+            dll = os.path.join(a.out, "liblz4ref-%s.dll" % version)
+            build_windows(a, sources, lib, dll)
+            print(dll)
+            continue
         so = os.path.join(a.out, "liblz4ref-%s%s" % (version, ".dylib" if sys.platform == "darwin" else ".so"))
         cmd = [a.cc] + shlex.split(a.cflags) + [
                "-O2", "-fPIC", "-dynamiclib" if sys.platform == "darwin" else "-shared", "-o", so,
