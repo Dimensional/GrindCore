@@ -4,6 +4,16 @@ The loaded library is gctest.LIB; test modules are gctest/test_*.py (unittest).
 """
 LIB = None
 
+
+def address_sanitizer():
+    """True under AddressSanitizer: a sanitizer build of the library with its runtime preloaded (SAN=1 in
+    tools/native-build/hosts/native-tests.sh). Its shadow memory reserves terabytes of address space."""
+    import ctypes
+    try:
+        return hasattr(ctypes.CDLL(None), "__asan_init")
+    except (OSError, TypeError):  # Windows has no global symbol namespace to look in
+        return False
+
 # Defects in the shipped binaries that tests detect. On a library that has one, the test reports it (skip, with this
 # reason) instead of failing; on a fixed library the same test must pass. Each has its audit reference.
 KNOWN_DEFECTS = {
@@ -77,6 +87,12 @@ KNOWN_DEFECTS = {
                              "encoded frames that don't decode. Only with FL2_setDStreamTimeout/FL2_setCStreamTimeout, "
                              "which GrindCore.net doesn't use; unfixed upstream, fixed in fl2_pool.c on "
                              "audit/native-fixes; audit/other-codecs.md 4.4.1",
+    "fl2-decoder-tail-overread": "fast-lzma2's LZMA2 decoder decodes a chunk that's all there with LZMA_FINISH_END, "
+                                 "whose fast loop runs to the chunk's last byte (lzma2_dec.c:870), so a corrupt chunk "
+                                 "is read up to 19 bytes past its end: past the caller's buffer for the last chunk "
+                                 "(FL2_decompress, FL2_decompressMt, FL2_decompressDCtx, the single-threaded stream). "
+                                 "Read-only, corrupt input only; a crash only at a page boundary. Unfixed in 1.0.1 and "
+                                 "master; audit/other-codecs.md 4.4.1",
     "lzma-null-args": "the LZMA/LZMA2 PAL passes every pointer through, and 7-Zip dereferences a NULL decoder, encoder, "
                       "length, status or properties pointer (even Dec_Free(NULL)), and decodes with a freed decoder or "
                       "past its dictionary: a crash; fixed in the PAL on audit/native-fixes; audit/lzma.md 3.6",

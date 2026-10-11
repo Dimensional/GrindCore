@@ -84,6 +84,12 @@ below, keep the references, and run each Linux RID in the image GrindCore.build 
 - **Memory caps:** some corruption sweeps allocate a lot when a defect is present. Run Linux containers with `-m 4g`
   (`-m 2560m --memory-swap 2560m` on a 4 GB Raspberry Pi). Never flip seek-table bits in ad-hoc sweeps: on unfixed
   zstd seekable loaders, one bit makes them allocate about 26 GB.
+- **Sanitizer builds** (`-fsanitize=address` or `=undefined`): run the suite as usual, with the sanitizer's runtime
+  preloaded into Python (`LD_PRELOAD`, plus `PYTHONMALLOC=malloc` and `ASAN_OPTIONS=detect_leaks=0` for ASan).
+  - Two tests skip under ASan, saying why: an address-space limit, and a leak test that measures memory, which ASan's
+    quarantine inflates. They use `gctest.address_sanitizer()`.
+  - Crash probes in child processes recognise a sanitizer's `DEADLYSIGNAL` exit.
+  - The workspace's `tools/native-build` does all of this with `SAN=1 hosts/native-tests.sh`.
 
 ## References (official libraries, built from pinned sources)
 

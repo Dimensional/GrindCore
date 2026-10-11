@@ -121,10 +121,10 @@ def liblzma_encode(data, preset=6):
 
 
 class _In(object):
-    """Bytes at a fixed address."""
+    """Bytes at a fixed address; `slack` zero bytes after them that the callee isn't told about."""
 
-    def __init__(self, data):
-        self.keep = ctypes.create_string_buffer(bytes(data), max(1, len(data)))
+    def __init__(self, data, slack=0):
+        self.keep = ctypes.create_string_buffer(bytes(data) + b"\0" * slack, max(1, len(data) + slack))
         self.addr, self.n = ctypes.addressof(self.keep), len(data)
 
 
@@ -157,9 +157,9 @@ class Api(object):
     def cctx(self, threads=1):
         return CCtx(self, threads)
 
-    def decompress(self, frame, capacity, threads=1):
+    def decompress(self, frame, capacity, threads=1, slack=0):
         """FL2_decompressMt into a buffer of exactly `capacity` (plus a guard that must stay untouched)."""
-        src = _In(frame)
+        src = _In(frame, slack)
         guard = b"\xa5" * 64
         dst = ctypes.create_string_buffer(capacity + len(guard))
         ctypes.memmove(ctypes.addressof(dst) + capacity, guard, len(guard))
@@ -317,10 +317,10 @@ class DStream(object):
         r = self.api.call("FL2_decompressStream", self.s, ctypes.addressof(self.ob), ctypes.addressof(self.ib))
         return r, self.ib.pos, self.ob.pos
 
-    def decode(self, frame, in_step=1 << 16, out_step=1 << 16, max_calls=1 << 22):
+    def decode(self, frame, in_step=1 << 16, out_step=1 << 16, max_calls=1 << 22, slack=0):
         """Decode until FL2_decompressStream returns 0 (frame done): (data, bytes of the frame consumed). An error
         raises Fl2Error; running out of input before the end raises EOFError."""
-        src, out, got, pos = _In(frame), ctypes.create_string_buffer(out_step), bytearray(), 0
+        src, out, got, pos = _In(frame, slack), ctypes.create_string_buffer(out_step), bytearray(), 0
         for _ in range(max_calls):
             n = min(in_step, len(frame) - pos)
             r, used, wrote = self.call(src, pos, n, out)

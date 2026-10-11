@@ -15,6 +15,9 @@ CYCLES = 12
 
 class Lzma2HandleReuse(unittest.TestCase):
     def test_prepare_after_multithreaded_encode_frees_everything(self):
+        if gctest.address_sanitizer():  # measured: 68 MiB over the cycles under ASan, 0 without it
+            self.skipTest("AddressSanitizer: its quarantine keeps freed memory (up to 256 MiB), so memory growth "
+                          "can't show a leak here; Valgrind's leakcheck.py covers it")
         rc, out, err = child("""
             import ctypes, json, os, sys
             from gctest import lzma_util as U

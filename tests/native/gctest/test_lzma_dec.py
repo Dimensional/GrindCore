@@ -373,6 +373,8 @@ class LzmaDecTests(unittest.TestCase):
         """)
         if D.IS_32:
             prefix = ""
+        elif gctest.address_sanitizer():
+            self.skipTest("AddressSanitizer: its shadow memory doesn't fit a 1 GiB address-space limit")
         elif sys.platform.startswith("linux"):
             prefix = "import resource\nresource.setrlimit(resource.RLIMIT_AS, (1 << 30, 1 << 30))\n"
         else:

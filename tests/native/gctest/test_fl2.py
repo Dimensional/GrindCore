@@ -50,8 +50,9 @@ def crashed(rc, err):
 
 
 def faulted(rc, err):
-    """A memory fault in a child: a signal on Unix; on Windows ctypes turns an access violation into an OSError."""
-    return rc not in (0, 1) or "exception: access violation" in err
+    """A memory fault in a child: a signal on Unix; on Windows ctypes turns an access violation into an OSError. Under
+    a sanitizer (SAN=1 runs) its handler catches the signal, says <Name>Sanitizer:DEADLYSIGNAL and exits with 1."""
+    return rc not in (0, 1) or "exception: access violation" in err or "Sanitizer:DEADLYSIGNAL" in err
 
 
 class Fl2Tests(unittest.TestCase):
@@ -254,6 +255,40 @@ class Fl2Tests(unittest.TestCase):
                         known(self, "fl2-handlerepeat-overread")
                     self.fail("rc %s: %s" % (rc, err[-800:]))
 
+    def test_decoder_reads_only_its_input(self):
+        """The decoders read only the input they're given. Upstream's chunk decoder (lzma2_dec.c:1096-1106) decodes a
+        chunk that's all there with LZMA_FINISH_END, whose fast loop may start a symbol at the chunk's last byte
+        (:870) when one can need up to 20, so a corrupt chunk is read up to 19 bytes past its end: past the caller's
+        buffer for the frame's last chunk. AddressSanitizer found it with six bit flips of test_corrupt_input's frame
+        (other-codecs.md 4.4.1); here each is decoded from a buffer that ends at a no-access page, through
+        FL2_decompress and the single-threaded stream, in a child."""
+        code = """
+            import ctypes, hashlib
+            from gctest import fl2_util as F, sample
+            z = F.grindcore(L)
+            f = z.compress(sample.text(3000, seed=9), 6)
+            print("frame", hashlib.sha256(f).hexdigest()[:16], flush=True)
+            out = ctypes.create_string_buffer(3100)
+            for byte, bit in ((397, 0), (447, 2), (480, 1), (504, 2), (530, 2), (534, 1)):
+                g = bytearray(f); g[byte] ^= 1 << bit
+                src = F.Guarded(bytes(g))
+                if %r == "one":
+                    z.call("FL2_decompressMt", out, len(out), src.addr, len(g), 1)
+                else:
+                    d = z.dstream(1)
+                    d.call(src, 0, len(g), out)
+                    d.close()
+                print("ok", byte, bit, flush=True)
+        """
+        for how in ("one", "stream"):
+            with self.subTest(how=how):
+                rc, out, err = child(code % how, timeout=60)
+                if rc != 0 and faulted(rc, err):
+                    known(self, "fl2-decoder-tail-overread")
+                self.assertEqual(rc, 0, err[-800:])
+                if "frame 373678b773961a81" not in out:  # the frame linux-x64 writes, which the flips were found in
+                    self.skipTest("this build writes a different frame (%s), so the six flips don't apply" % out.split()[1])
+
     # ------------------------------------------------------------------ API semantics GrindCore.net relies on
 
     def test_level_resets_parameters(self):
@@ -444,7 +479,9 @@ class Fl2Tests(unittest.TestCase):
     def test_corrupt_input(self):
         """Every single-bit flip of a small frame, every truncation, and 200 random bodies behind a valid property
         byte, through FL2_decompress, FL2_decompressMt (2 threads) and both streaming decoders: nothing crashes or
-        hangs, nothing writes past its buffer, and with the hash on, nothing wrong is accepted as success."""
+        hangs, nothing writes past its buffer, and with the hash on, nothing wrong is accepted as success. Each input
+        has 32 bytes of slack after it: a few of these make the decoders read up to 19 bytes past their input, which
+        test_decoder_reads_only_its_input checks, and the slack keeps an AddressSanitizer run of this one going."""
         code = """
             from gctest import fl2_util as F, sample
             import random, ctypes
@@ -462,13 +499,13 @@ class Fl2Tests(unittest.TestCase):
                 for how in ("one", "mt", "s1", "s2"):
                     try:
                         if how == "one":
-                            got = z.decompress(g, len(data) + 100)
+                            got = z.decompress(g, len(data) + 100, slack=32)
                         elif how == "mt":
-                            got = z.decompress(g, len(data) + 100, threads=2)
+                            got = z.decompress(g, len(data) + 100, threads=2, slack=32)
                         else:
                             d = z.dstream(1 if how == "s1" else 2)
                             try:
-                                got = d.decode(g, 997, 1500, max_calls=20000)[0]
+                                got = d.decode(g, 997, 1500, max_calls=20000, slack=32)[0]
                             finally:
                                 d.close()
                     except (F.Fl2Error, EOFError):
@@ -593,7 +630,8 @@ class Fl2Tests(unittest.TestCase):
         by level, by parameters and from a configured context agree once the stream is initialised (buffers are
         allocated then); more threads and higher levels cost more. Out of range, FL2_estimateCStreamSize indexes the
         level table without a check (fl2_compress.c:1296) and adds what it finds there to FL2_estimateCCtxSize's
-        error code: levels below 0 or above 11 return garbage, and level 0 leaves the dictionary out."""
+        error code: levels below 0 or above 11 return garbage, and level 0 leaves the dictionary out. Those calls
+        run in a child process: they read past a static table, which a sanitizer build stops at."""
         est = self.z.call
         p = self.L.struct.FL2_compressionParameters()
         for level in (1, 6, 10):
@@ -620,11 +658,15 @@ class Fl2Tests(unittest.TestCase):
         self.assertGreaterEqual(est("FL2_estimateDStreamSize", 16 << 20, 1), 16 << 20)
         self.assertGreater(est("FL2_estimateDStreamSize", 16 << 20, 4), est("FL2_estimateDStreamSize", 16 << 20, 1))
         self.assertEqual(F.error_of(est("FL2_estimateCCtxSize", 11, 1)), F.PARAMETER_OUT_OF_BOUND)
-        level6 = est("FL2_estimateCCtxSize", 6, 1) + F.LEVEL_DICT[6]
-        bad = [lv for lv in (-1, 0, 12, 13)
-               if F.error_of(est("FL2_estimateCStreamSize", lv, 1, 0)) != F.PARAMETER_OUT_OF_BOUND
-               and est("FL2_estimateCStreamSize", lv, 1, 0) != level6]
-        if bad:
+        rc, out, err = child("""
+            from gctest import fl2_util as F
+            z = F.grindcore(L)
+            level6 = z.call("FL2_estimateCCtxSize", 6, 1) + F.LEVEL_DICT[6]
+            for lv in (-1, 0, 12, 13):
+                r = z.call("FL2_estimateCStreamSize", lv, 1, 0)
+                print(lv, "ok" if F.error_of(r) == F.PARAMETER_OUT_OF_BOUND or r == level6 else "bad", flush=True)
+        """)
+        if rc != 0 or "bad" in out:  # a sanitizer build stops the child at the first read past the table
             known(self, "fl2-estimate-level-unchecked")
 
     def test_bare_stream_with_stored_property(self):
