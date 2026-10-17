@@ -20,7 +20,8 @@ def corpus():
     noise = r.getrandbits(8 * (256 << 10)).to_bytes(256 << 10, "little")
     # structured binary: records with counters and repeated headers, like disc sectors or tables
     rec = b"".join(b"HDR!" + i.to_bytes(4, "little") + bytes([i & 0xFF]) * 24 + noise[i * 32:i * 32 + 32] for i in range(4096))
-    # plus the suite's own 70 KB samples, on which x87 floating point changed zstd 1.5.2's L5/L9 output (build-exam.md)
+    # plus the suite's own 70 KB samples, on which zstd 1.5.2's L5/L9 output differs where its row matcher has no SIMD
+    # path: linux-arm, and linux-x86 before it was built with SSE2 (not floating point; architecture-limitations.md AL6)
     return [("empty", b""), ("text-100B", text[:100]), ("text-1M", text), ("noise-256K", noise),
             ("zeros-1M", bytes(1 << 20)), ("records-256K", rec), ("mixed-2.5M", text + noise + bytes(512 << 10) + rec + text[:256 << 10]),
             ("s-text-70K", sample.text(70000)), ("s-mixed-70K", sample.mixed(70000))]
