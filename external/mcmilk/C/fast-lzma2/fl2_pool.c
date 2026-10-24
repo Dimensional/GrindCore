@@ -174,7 +174,12 @@ void FL2POOL_add(void* ctxVoid, FL2POOL_function function, void *opaque, ptrdiff
 int FL2POOL_waitAll(void *ctxVoid, unsigned timeout)
 {
     FL2POOL_ctx* const ctx = (FL2POOL_ctx*)ctxVoid;
-    if (!ctx || (!ctx->numThreadsBusy && ctx->queueIndex >= ctx->queueEnd) || ctx->shutdown) { return 0; }
+    /* [audit fix, audit/other-codecs.md 4.4.1 finding 12] no shortcut without the lock. It read numThreadsBusy, then
+     * queueIndex, while a worker taking a job increments queueIndex, then numThreadsBusy (fl2_pool.c FL2POOL_thread),
+     * so it could see that job as neither queued nor busy and return while it ran. The caller then read the job's
+     * result before it existed and freed its decoder under it (FL2_decompressMt), or used the encoder's tables while
+     * they were being built: wrong output, crashes. The locked wait below handles every case. */
+    if (!ctx) { return 0; }
 
     FL2_pthread_mutex_lock(&ctx->queueMutex);
     /* Need to test for ctx->queueIndex < ctx->queueEnd in case not all jobs have started */

@@ -245,6 +245,11 @@ python3 fuzz/fuzz.py lzma --minutes 20      # 7-Zip's LZMA and LZMA2 decoders: o
   - Inputs that declare a dictionary over 16 MiB are capped, since allocating what a stream declares is the
     format, not a defect.
 - The other decoders (zstd, LZ4, Brotli, zlib, bzip2) aren't here: they are fuzzed continuously upstream.
+- **`fuzz/pool_race.py`** is a deterministic check of Fast-LZMA2's thread-pool wait (2026-10-24), which a fuzz run
+  caught letting a multithreaded decode go on while a worker was just starting its job. The window is two memory
+  loads wide, so it builds `fl2_pool_race.c` against a copy of `fl2_pool.c` with a delay in that window (the
+  vendored file isn't touched), then decodes and compresses valid data with 2 threads under ASan: a pool with the
+  bug crashes in both, a fixed one passes. `python3 fuzz/pool_race.py`, on Linux, as `fuzz.py`.
 
 ## Harness lessons (each one cost a debugging session)
 
