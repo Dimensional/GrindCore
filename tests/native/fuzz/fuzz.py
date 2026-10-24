@@ -27,14 +27,15 @@ XXH = os.path.join(EXT, "facebook", "zstd_v1_5_7", "common")  # FL2 links shared
 
 # target -> (sources, include directories, extra flags), the sources and includes as GrindCore's CMake builds them
 TARGETS = {
-    # external/mcmilk/mcmilk-fast-lzma2.cmake's FL2_SOURCES_BASE, plus facebook-shared_xxhash.cmake. ASan checks writes
-    # only: the decoder's known over-read (other-codecs.md 4.4.1 finding 10) is a read and would stop every run.
+    # external/mcmilk/mcmilk-fast-lzma2.cmake's FL2_SOURCES_BASE, plus facebook-shared_xxhash.cmake. Reads are checked
+    # too since the decoder's over-read was fixed (other-codecs.md 4.4.1 finding 10, 2026-10-24). On a tree without
+    # that fix, --writes-only checks writes alone, as the first runs did: that over-read would stop every run.
     "fl2": ([os.path.join(FL2, s) for s in ("dict_buffer.c", "fl2_common.c", "fl2_compress.c", "fl2_decompress.c",
                                             "fl2_pool.c", "fl2_threading.c", "lzma2_dec.c", "lzma2_enc.c",
                                             "radix_bitpack.c", "radix_mf.c", "radix_struct.c", "range_enc.c", "util.c")]
             + [os.path.join(XXH, "xxhash.c")],
             [FL2, os.path.join(EXT, "mcmilk", "C", "7z-deps"), XXH],
-            ["-mllvm", "-asan-instrument-reads=0"]),
+            []),
     # external/sevenzip/sevenzip-lzma_v25_01.cmake's C decoders (its assembler one is win-x64 only); reads checked too
     "lzma": ([os.path.join(EXT, "sevenzip", "lzma", s) for s in ("LzmaDec.c", "Lzma2Dec.c")],
              [os.path.join(EXT, "sevenzip", "lzma")], []),
@@ -106,8 +107,12 @@ def main():
     ap.add_argument("--minutes", type=float, default=30)
     ap.add_argument("--cc", default=default_cc())
     ap.add_argument("--out", default=os.path.join(HERE, "out"))
+    ap.add_argument("--writes-only", action="store_true",
+                    help="ASan checks writes only (for a tree with a known read-only over-read, e.g. FL2 before 2026-10-24)")
     a = ap.parse_args()
     sources, includes, flags = TARGETS[a.target]
+    if a.writes_only:
+        flags = flags + ["-mllvm", "-asan-instrument-reads=0"]
     os.makedirs(a.out, exist_ok=True)
     exe = os.path.join(a.out, a.target + "_decode")
     cmd = ([a.cc, "-g", "-O1", "-fsanitize=fuzzer,address", "-pthread"] + flags + ["-I" + i for i in includes]

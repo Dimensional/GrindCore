@@ -239,8 +239,9 @@ python3 fuzz/fuzz.py lzma --minutes 20      # 7-Zip's LZMA and LZMA2 decoders: o
   `--security-opt seccomp=unconfined`, so `fuzz.py` can turn off address randomisation (`setarch -R`); otherwise
   clang 15's ASan crashes at start in about 3 runs of 10.
 - **What counts:** crashes, writes past a buffer, uses after free, leaks and hangs.
-  - Fast-LZMA2 is built with ASan's read checks off. Its decoder's known over-read on corrupt input is a read, and
-    with reads checked it stops every run within seconds.
+  - Reads are checked too. Before 2026-10-24, Fast-LZMA2 was fuzzed with ASan's read checks off: its decoder's
+    over-read on corrupt input (since fixed) stopped every run within seconds. `--writes-only` does that for a tree
+    without the fix.
   - Inputs that declare a dictionary over 16 MiB are capped, since allocating what a stream declares is the
     format, not a defect.
 - The other decoders (zstd, LZ4, Brotli, zlib, bzip2) aren't here: they are fuzzed continuously upstream.

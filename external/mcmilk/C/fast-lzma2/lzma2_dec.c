@@ -862,21 +862,33 @@ static size_t LZMA_decodeToDic(LZMA2_DCtx *const p, size_t const dic_limit, cons
         if (p->need_init_state)
             LZMA_initStateReal(p);
 
-        const BYTE *buf_limit;
-        if (finish_mode == LZMA_FINISH_END) {
-            buf_limit = src + in_size;
+        size_t processed;
+        if (finish_mode == LZMA_FINISH_END && in_size <= LZMA_REQUIRED_INPUT_MAX) {
+            /* [audit fix, audit/other-codecs.md 4.4.1 finding 10] a symbol can need up to LZMA_REQUIRED_INPUT_MAX
+             * bytes, and LZMA_FINISH_END decoded up to the chunk's last byte, so a corrupt chunk was read up to 19
+             * bytes past its end: past the caller's buffer for a frame's last chunk. The fast loop now keeps that
+             * margin in both modes (below), and the chunk's last bytes are decoded from a zero-padded copy. Using
+             * more bytes than the chunk has means it's corrupt; a valid chunk never does. (7-Zip's LzmaDec keeps
+             * the same margin and checks the last symbols with LzmaDec_TryDummy.) */
+            BYTE tail[2 * LZMA_REQUIRED_INPUT_MAX] = { 0 };
+            memcpy(tail, src, in_size);
+            p->buf = tail;
+            CHECK_F(LZMA_decodeReal2(p, dic_limit, tail + in_size));
+            processed = (size_t)(p->buf - tail);
+            if (processed > in_size)
+                return FL2_ERROR(corruption_detected);
         }
         else {
             if (in_size <= LZMA_REQUIRED_INPUT_MAX) {
                 return LZMA_STATUS_NEEDS_MORE_INPUT;
             }
-            buf_limit = src + in_size - LZMA_REQUIRED_INPUT_MAX;
+            const BYTE *const buf_limit = src + in_size - LZMA_REQUIRED_INPUT_MAX;
+            p->buf = src;
+
+            CHECK_F(LZMA_decodeReal2(p, dic_limit, buf_limit));
+
+            processed = (size_t)(p->buf - src);
         }
-        p->buf = src;
-
-        CHECK_F(LZMA_decodeReal2(p, dic_limit, buf_limit));
-
-        size_t const processed = (size_t)(p->buf - src);
         (*src_len) += processed;
         src += processed;
         in_size -= processed;

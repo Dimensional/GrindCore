@@ -138,7 +138,8 @@ KNOWN_DEFECTS = {
                                  "is read up to 19 bytes past its end: past the caller's buffer for the last chunk "
                                  "(FL2_decompress, FL2_decompressMt, FL2_decompressDCtx, the single-threaded stream). "
                                  "Read-only, corrupt input only; a crash only at a page boundary. Unfixed in 1.0.1 and "
-                                 "master; audit/other-codecs.md 4.4.1",
+                                 "master, fixed in lzma2_dec.c on audit/native-fixes (the last bytes are decoded from "
+                                 "a padded copy); audit/other-codecs.md 4.4.1 finding 10",
     "fl2-lzma-chunk-without-props": "fast-lzma2's LZMA2 decoder never checks need_init_prop, so after a dictionary "
                                     "reset it decodes an LZMA chunk that carries no properties, with pb never set "
                                     "(lzma2_dec.c:959-961 set lc twice): out-of-bounds probability accesses on "

@@ -4,20 +4,20 @@
  *   - FL2_decompress, one-shot (FastLzma2Block with one thread);
  *   - FL2_decompressMt with 2 threads (FastLzma2Block with ThreadCount 2);
  *   - FL2_decompressStream on one thread, fed 13 bytes and drained 4 KiB at a time (FastLzma2Decoder).
- * What counts is a crash, a write past a buffer, a use after free, a leak or a hang. Excluded on purpose:
- *   - reads: fuzz.py builds this target with ASan's read checks off. The decoder reads up to 19 bytes past corrupt
- *     input (other-codecs.md 4.4.1 finding 10, known, read-only), past the caller's buffer or the stream decoder's own
- *     overlap buffer, and with reads checked every run stops on it within seconds;
- *   - the 32 bytes of slack after each input keep that over-read inside the input's own allocation;
- *   - the dictionary property is capped at 24 (16 MiB): a frame may declare up to 1.5 GiB, which the stream decoder
- *     then allocates. That is the format, not a defect. */
+ * What counts is a crash, a read or write past a buffer, a use after free, a leak or a hang. Each input sits in an
+ * allocation of exactly its size, so reading one byte past it is a finding.
+ *   - Before 2026-10-24 reads were unchecked (fuzz.py --writes-only) and 32 bytes of slack followed each input: the
+ *     decoder read up to 19 bytes past corrupt input (other-codecs.md 4.4.1 finding 10, since fixed), and with reads
+ *     checked every run stopped on it within seconds.
+ *   - Excluded on purpose: the dictionary property is capped at 24 (16 MiB). A frame may declare up to 1.5 GiB, which
+ *     the stream decoder then allocates. That is the format, not a defect. */
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "fast-lzma2.h"
 
-#define SLACK 32
+#define SLACK 0  /* bytes after each input; 32 while reads were unchecked */
 #define OUT_CAP (1 << 20)
 #define MAX_PROP 24
 
