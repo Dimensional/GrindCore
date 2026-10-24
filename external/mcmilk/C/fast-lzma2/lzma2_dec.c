@@ -958,7 +958,7 @@ size_t LZMA2_initDecoder(LZMA2_DCtx *const p, BYTE const dict_prop, BYTE *const 
     p->dic_buf_size = dic_buf_size;
     p->prop.lc = 3;
     p->prop.lp = 0;
-    p->prop.lc = 2;
+    p->prop.pb = 2; /* [audit fix, audit/other-codecs.md 4.4.1 finding 11] was lc = 2, so pb was never set */
     p->prop.dic_size = (U32)dict_size;
 
     p->state2 = LZMA2_STATE_CONTROL;
@@ -1061,8 +1061,15 @@ static size_t LZMA2_decodeChunkToDic(LZMA2_DCtx *const p, size_t const dic_limit
             unsigned const mode = LZMA2_GET_LZMA_MODE(p->control);
             BYTE const init_dic = (mode == 3);
             BYTE const init_state = (mode != 0);
-            if ((!init_dic && p->need_init_dic) || (!init_state && p->need_init_state2))
+            /* [audit fix, audit/other-codecs.md 4.4.1 finding 11] after a dictionary reset, a chunk with properties
+             * (mode 2 or 3) must come before any chunk without (mode 0 or 1), as 7-Zip's Lzma2Dec requires.
+             * need_init_prop was set but never checked, so such a chunk was decoded with pb unset, and its
+             * probability pointers went out of bounds. */
+            if ((!init_dic && p->need_init_dic) || (!init_state && p->need_init_state2)
+                || (mode < 2 && p->need_init_prop))
                 return FL2_ERROR(corruption_detected);
+            if (mode >= 2)
+                p->need_init_prop = 0;
 
             LZMA_initDicAndState(p, init_dic, init_state);
             p->need_init_dic = 0;
@@ -1242,8 +1249,15 @@ size_t LZMA2_decodeToDic(LZMA2_DCtx *const p, size_t const dic_limit,
                 unsigned const mode = LZMA2_GET_LZMA_MODE(p->control);
                 BYTE const init_dic = (mode == 3);
                 BYTE const init_state = (mode != 0);
-                if ((!init_dic && p->need_init_dic) || (!init_state && p->need_init_state2))
+                /* [audit fix, audit/other-codecs.md 4.4.1 finding 11] after a dictionary reset, a chunk with properties
+                 * (mode 2 or 3) must come before any chunk without (mode 0 or 1), as 7-Zip's Lzma2Dec requires.
+                 * need_init_prop was set but never checked, so such a chunk was decoded with pb unset, and its
+                 * probability pointers went out of bounds. */
+                if ((!init_dic && p->need_init_dic) || (!init_state && p->need_init_state2)
+                    || (mode < 2 && p->need_init_prop))
                     break;
+                if (mode >= 2)
+                    p->need_init_prop = 0;
 
                 LZMA_initDicAndState(p, init_dic, init_state);
                 p->need_init_dic = 0;
