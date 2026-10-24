@@ -121,11 +121,41 @@ def liblzma_encode(data, preset=6):
 
 
 class _In(object):
-    """Bytes at a fixed address; `slack` zero bytes after them that the callee isn't told about."""
+    """Bytes at a fixed address; `slack` bytes of `fill` after them that the callee isn't told about."""
 
-    def __init__(self, data, slack=0):
-        self.keep = ctypes.create_string_buffer(bytes(data) + b"\0" * slack, max(1, len(data) + slack))
+    def __init__(self, data, slack=0, fill=0):
+        self.keep = ctypes.create_string_buffer(bytes(data) + bytes([fill]) * slack, max(1, len(data) + slack))
         self.addr, self.n = ctypes.addressof(self.keep), len(data)
+
+
+def props_missing_after_reset(frame):
+    """True if the frame's LZMA2 stream has an LZMA chunk without properties (mode 0 or 1) after an uncompressed chunk
+    that resets the dictionary, before any chunk with properties: what 7-Zip's Lzma2Dec rejects and upstream
+    fast-lzma2 decoded with pb unset (other-codecs.md 4.4.1 finding 11). Walks the chunk headers only; a stream that
+    both decoders reject anyway (no dictionary reset first, a bad control byte, truncation) is False."""
+    p, need_dic, need_prop = 1, True, True  # byte 0 is FL2's property byte
+    while p < len(frame):
+        c = frame[p]
+        if c == 0:
+            return False
+        if c in (1, 2):
+            if p + 3 > len(frame) or (c == 2 and need_dic):
+                return False
+            if c == 1:
+                need_dic, need_prop = False, True
+            p += 3 + ((frame[p + 1] << 8) | frame[p + 2]) + 1
+        elif c >= 0x80:
+            mode = (c >> 5) & 3
+            if p + 5 > len(frame) or (need_dic and mode != 3):
+                return False
+            if mode < 2 and need_prop:
+                return True
+            if mode >= 2:
+                need_dic, need_prop = False, False
+            p += 5 + (mode >= 2) + ((frame[p + 3] << 8) | frame[p + 4]) + 1
+        else:
+            return False
+    return False
 
 
 class Api(object):
@@ -157,9 +187,9 @@ class Api(object):
     def cctx(self, threads=1):
         return CCtx(self, threads)
 
-    def decompress(self, frame, capacity, threads=1, slack=0):
+    def decompress(self, frame, capacity, threads=1, slack=0, fill=0):
         """FL2_decompressMt into a buffer of exactly `capacity` (plus a guard that must stay untouched)."""
-        src = _In(frame, slack)
+        src = _In(frame, slack, fill)
         guard = b"\xa5" * 64
         dst = ctypes.create_string_buffer(capacity + len(guard))
         ctypes.memmove(ctypes.addressof(dst) + capacity, guard, len(guard))

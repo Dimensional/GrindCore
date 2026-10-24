@@ -221,6 +221,126 @@ class Fl2Tests(unittest.TestCase):
                     self.same(self.z.compress(data, level), self.master.compress(data, level))
                     self.same(self.stream(data, min(level, 6)), self.stream(data, min(level, 6), api=self.master))
 
+    def test_decoders_match_official(self):
+        """GrindCore's decoders against official 1.0.1's on valid frames, so the decoder fixes (other-codecs.md 4.4.1
+        findings 10, 11 and 12) are shown to change nothing a valid frame can show. Frames from both libraries: levels
+        1, 6 and 10, with 1 and 2 threads; a multi-block frame (a dictionary reset per 1 MiB block), which the
+        multithreaded decoders split across threads; a double-buffered stream flushed every 16 KiB; and a frame without
+        a hash. Each is decoded by both libraries one-shot, with 2 and 4 threads, and streamed in 997-byte pieces with 1
+        and 2 threads, and every decode must give the data."""
+        self.need_ref()
+        data, big = sample.mixed(300000), sample.text(3 << 20, seed=4)
+        frames = []
+        for api in (self.z, self.ref):
+            for level, threads in ((1, 1), (6, 2), (10, 1)):
+                frames.append(("%s L%d %dT" % (api.label, level, threads), data, api.compress(data, level, threads)))
+            for name, want, params in (("blocks", big, ((F.LEVEL, 2), (F.DICTIONARY_SIZE, 1 << 20), (F.RESET_INTERVAL, 1))),
+                                       ("no hash", data, ((F.LEVEL, 3), (F.DO_XXHASH, 0)))):
+                c = api.cctx(2)
+                try:
+                    for p, v in params:
+                        self.assertFalse(F.is_error(c.set(p, v)), "setParameter(%d, %d)" % (p, v))
+                    frames.append(("%s %s" % (api.label, name), want, c.compress(want)))
+                finally:
+                    c.close()
+            frames.append(("%s dual-buffered" % api.label, data, self.stream(data, 6, 2, 1, 1 << 14, True, api=api)))
+        for name, want, frame in frames:
+            for api in (self.z, self.ref):
+                for threads in (1, 2, 4):
+                    with self.subTest(frame=name, decoder="%s, %d thread(s)" % (api.label, threads)):
+                        self.same(api.decompress(frame, len(want), threads), want)
+                for threads in (1, 2):
+                    with self.subTest(frame=name, decoder="%s, stream with %d thread(s)" % (api.label, threads)):
+                        self.same(self.dstream(frame, threads, 997, 1 << 14, api=api)[0], want)
+
+    def test_corrupt_input_matches_official(self):
+        """test_corrupt_input's inputs (every bit flip of a small frame, every truncation, 200 random bodies), decoded
+        one-shot by GrindCore and by official 1.0.1, in a child: both must give the same bytes, or both an error,
+        except where GrindCore's decoder fixes are meant to differ. Those the test tells apart by themselves:
+          - finding 11: an LZMA chunk without properties after a dictionary reset (read from the chunk headers,
+            fl2_util.props_missing_after_reset). GrindCore must reject it; official isn't run on it, since it decodes
+            with pb unset and writes out of bounds;
+          - finding 10: official reads past a chunk's declared end: past the input for the frame's last chunk, and into
+            the following bytes for an earlier one, so it can even decode a chunk whose declared packed size is too
+            small when those bytes happen to be its data (a flip in the size field does it). GrindCore stops at the
+            declared end and reports corruption. So where GrindCore gives an error and official doesn't, liblzma, the
+            format's reference decoder, must reject the input too.
+        Any other difference fails, and so would GrindCore accepting what official rejects. A library without the
+        finding-11 fix (test_lzma_chunk_without_properties_is_rejected) isn't run on those inputs either, and reports the
+        known defect."""
+        self.need_ref()
+        code = """
+            from gctest import fl2_util as F, sample
+            import lzma, random
+            z, ref = F.grindcore(L), F.reference("1.0.1")
+            data = sample.text(3000, seed=9)
+            f = z.compress(data, 6)
+            cases = []
+            for i in range(len(f) * 8):
+                g = bytearray(f); g[i // 8] ^= 1 << (i % 8); cases.append(bytes(g))
+            cases += [f[:n] for n in range(1, len(f))]
+            r = random.Random(1)
+            cases += [f[:1] + bytes(r.randrange(256) for _ in range(r.randrange(1, 400))) for _ in range(200)]
+            # and finding 11's own input (test_lzma_chunk_without_properties_is_rejected's frame, with the chunk's data)
+            cases.append(bytes([16, 0x01, 0x00, 0x0F]) + b"a" * 16 + bytes([0xA0, 0x00, 0x0F, 0x00, 0x04]) + bytes(6))
+            def run(api, g):
+                try:
+                    return api.decompress(g, len(data) + 100, slack=32)
+                except F.Fl2Error:
+                    return "error"
+            def liblzma_rejects(g):
+                p = g[0] & 0x3F
+                if p > 40:
+                    return True
+                d = 0xFFFFFFFF if p == 40 else (2 | (p & 1)) << (p // 2 + 11)
+                dec = lzma.LZMADecompressor(format=lzma.FORMAT_RAW, filters=[
+                    {"id": lzma.FILTER_LZMA2, "dict_size": min(max(4096, d), 1536 << 20)}])
+                try:
+                    dec.decompress(g[1:], len(data) + 100)
+                except lzma.LZMAError:
+                    return True
+                return not dec.eof
+            fixed11 = FIXED11
+            same = f10 = f11 = 0
+            other = []
+            for i, g in enumerate(cases):
+                if F.props_missing_after_reset(g):
+                    f11 += 1
+                    if fixed11 and run(z, g) != "error":
+                        other.append((i, "finding-11 input accepted"))
+                    continue
+                ours, theirs = run(z, g), run(ref, g)
+                if ours == theirs:
+                    same += 1
+                elif ours == "error" and liblzma_rejects(g):
+                    f10 += 1
+                else:
+                    other.append((i, "GrindCore %s, official %s" % (
+                        "error" if ours == "error" else "%d bytes" % len(ours),
+                        "error" if theirs == "error" else "%d bytes" % len(theirs))))
+            print("cases", len(cases), "same", same, "finding10", f10, "finding11", f11, "other", len(other))
+            for i, why in other[:10]:
+                print("  case", i, why)
+        """
+        fixed11 = self._rejects_props_less_chunk()
+        rc, out, err = child(code.replace("FIXED11", repr(fixed11)), timeout=900)
+        self.assertEqual(rc, 0, err[-1500:])
+        print("  " + out.strip().replace("\n", "\n  "))
+        self.assertIn("other 0", out, out)
+        if not fixed11 and "finding11 0" not in out:
+            known(self, "fl2-lzma-chunk-without-props")
+
+    def _rejects_props_less_chunk(self):
+        """test_lzma_chunk_without_properties_is_rejected's safe probe: does this library reject the chunk header?"""
+        frame = bytes([16]) + bytes([0x01, 0x00, 0x0F]) + b"a" * 16 + bytes([0xA0, 0x00, 0x0F, 0x00, 0x04])
+        d = self.z.dstream(1)
+        src, out = F._In(frame), ctypes.create_string_buffer(4096)
+        try:
+            r = d.call(src, 0, len(frame), out)[0]
+        finally:
+            d.close()
+        return F.is_error(r)
+
     # ------------------------------------------------------------------ upstream defects
 
     def test_source_not_read_past_end(self):
