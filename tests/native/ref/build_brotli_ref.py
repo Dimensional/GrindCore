@@ -7,7 +7,9 @@ c/enc are compiled unmodified with no extra defines: official Brotli as released
 cast-only MSVC-warning patch, google/brotli@85d88cbf, and since audit/native-fixes builds with
 BROTLI_ENCODER_CLEANUP_ON_OOM plus the encode.c out-of-memory checks, other-codecs.md 4.3.1. None of that changes any
 output; it only changes what a failed encoder allocation does, which the tests check on GrindCore directly.)
-Unix and macOS; stdlib only, Python 3.6+.
+Unix, macOS, and Windows with MSVC (msvc.py: --arch x64/x86/arm64, default this machine's); stdlib only, Python 3.6+.
+On Windows the DLL exports the functions the tests bind (gctest/brotli_util.py REF_FUNCTIONS) through a .def, and is
+compiled with the code-generation options GrindCore's Windows build gives Brotli (/O2 /Ob2 /Ox /Oi /fp:precise /GL).
 
 The compiler defaults to the one GrindCore.build picks (eng/common/native/init-compiler.sh): $CC if set, else the
 highest-numbered clang-N on PATH, else clang, else cc. It matters for Brotli, unlike zstd or LZ4: for some inputs,
@@ -38,6 +40,10 @@ import subprocess
 import sys
 import tarfile
 import urllib.request
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)  # embeddable Pythons leave it off
+import msvc  # noqa: E402
 
 VERSION = "1.1.0"
 COMMIT = "ed738e842d2fbdf2d6459e39267a633c4a9b2f5d"
@@ -171,6 +177,26 @@ def default_cc():
     return "clang" if shutil.which("clang") else "cc"
 
 
+def build_windows(a, c, sources, dll):
+    sys.path.insert(0, os.path.dirname(HERE))       # tests/native, for gctest's list of the functions the tests bind
+    from gctest.brotli_util import REF_FUNCTIONS
+    work = dll + ".work"
+    os.makedirs(work, exist_ok=True)
+    msvc.write_def(os.path.join(work, "ref.def"), [n for n, _, _ in REF_FUNCTIONS])
+    # Brotli's sources share file names across c/common, c/dec and c/enc (state.c), so each folder's objects go in a
+    # folder of their own: one cl per folder, /Fo<folder>\.
+    steps = []
+    for d in ("common", "dec", "enc"):
+        files = [f for f in sources if os.path.basename(os.path.dirname(f)) == d]
+        os.makedirs(os.path.join(work, d), exist_ok=True)
+        steps.append('cl /nologo /c /O2 /Ob2 /Ox /Oi /Gy /GL /fp:precise /MT /DNDEBUG /W3 /I"%s"%s /Fo%s\\ %s' % (
+            os.path.join(c, "include"), " " + a.cflags if a.cflags else "", d, " ".join('"%s"' % f for f in files)))
+    objs = " ".join("%s\\%s.obj" % (os.path.basename(os.path.dirname(f)), os.path.splitext(os.path.basename(f))[0])
+                    for f in sources)
+    steps.append('link /nologo /DLL /LTCG /DEF:ref.def /OUT:"%s" %s' % (dll, objs))
+    msvc.run(msvc.arch_name(a.arch), steps, work)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "out"))
@@ -178,7 +204,9 @@ def main():
     ap.add_argument("--cflags", default="", help='extra compiler flags, e.g. "-arch x86_64" or "-m32"')
     ap.add_argument("--tarballs", help="a folder that may already hold brotli-%s.tar.gz and its testdata" % VERSION)
     ap.add_argument("--fixtures-only", action="store_true", help="fetch and verify the fixtures; build nothing")
+    ap.add_argument("--arch", choices=("x64", "x86", "arm64"), help="Windows: the target (default: this machine)")
     a = ap.parse_args()
+    a.out = os.path.abspath(a.out)  # MSVC compiles in a work folder under it
     os.makedirs(a.out, exist_ok=True)
     print(fetch_fixtures(a.out, a.tarballs))
     if a.fixtures_only:
@@ -192,6 +220,11 @@ def main():
                 t.extractall(a.out)
     c = os.path.join(src, "c")
     sources = sorted(f for d in ("common", "dec", "enc") for f in glob.glob(os.path.join(c, d, "*.c")))
+    if sys.platform == "win32":
+        dll = os.path.join(a.out, "libbrotliref-%s.dll" % VERSION)
+        build_windows(a, c, sources, dll)
+        print(dll)
+        return
     so = os.path.join(a.out, "libbrotliref-%s%s" % (VERSION, ".dylib" if sys.platform == "darwin" else ".so"))
     # --cflags come after -O2, so they can override it (e.g. -O3 with GrindCore.build's flags). Leave out
     # -fvisibility=hidden: it hides Brotli's own API, which the reference exists to export.

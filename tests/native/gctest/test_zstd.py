@@ -71,7 +71,7 @@ class _ZStdTests(object):
 
     def need_ref(self):
         if not self.ref:
-            self.skipTest("no official zstd %s: set GC_REF_ZSTD (ref/build_zstd_ref.py)" % self.VERSION)
+            gctest.need(self, "zstd", "no %s" % self.VERSION)
 
     def py_decode(self, stream):
         return pyzstd.decompress(stream) if pyzstd else None
@@ -90,19 +90,17 @@ class _ZStdTests(object):
                         self.assertEqual(self.py_decode(stream), data)
 
     def test_block_output_matches_official(self):
+        """Byte-identical to official zstd built from the release tarball, at every level; and where this Python's
+        compression.zstd is the same zstd version (3.14+ bundles 1.5.7), to that independent build too."""
         self.need_ref()
+        same_python = pyzstd is not None and py_version() == self.VERSION
         for name, data in corpus():
             for level in (1, 2, 3, 5, 9, 15, 19, 22) if len(data) <= 70000 else (1, 3, 9):
                 with self.subTest(data=name, level=level):
-                    self.assertEqual(self.z.compress_block(data, level)[1], self.ref.compress_block(data, level)[1])
-
-    def test_block_output_matches_python_when_same_zstd(self):
-        if not pyzstd or py_version() != self.VERSION:
-            self.skipTest("Python's compression.zstd is %s, not zstd %s" % (py_version(), self.VERSION))
-        for name, data in corpus():
-            for level in (1, 3, 9):
-                with self.subTest(data=name, level=level):
-                    self.assertEqual(self.z.compress_block(data, level)[1], pyzstd.compress(data, level))
+                    out = self.z.compress_block(data, level)[1]
+                    self.assertEqual(out, self.ref.compress_block(data, level)[1])
+                    if same_python:
+                        self.assertEqual(out, pyzstd.compress(data, level), "differs from Python's compression.zstd")
 
     def test_block_capacities(self):
         """zstd compresses into the caller's buffer and needs some headroom, so a buffer exactly the size of the

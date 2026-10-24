@@ -2,7 +2,49 @@
 
 The loaded library is gctest.LIB; test modules are gctest/test_*.py (unittest).
 """
+import unittest
+
 LIB = None
+RID = None  # the library's RID: --rid, else gcnative.target() (the legacy builds can't be told apart at run time)
+
+# What some tests need besides the library. A test that can't run without one calls need(), which skips it; a test
+# that only leaves a check out calls missing(). Both record it, and the run fails at the end unless that input can't
+# be had for this RID (unavailable()) or the run accepts its absence (--without), so a reference that a run forgot,
+# or a Python without a module, can't pass as a skip. --refs points every GC_REF_* at a folder of references.
+INPUTS = {
+    "zlib": "official zlib 1.3.1 and zlib-ng 2.2.1, GC_REF_ZLIB (ref/build_zlib_ref.py)",
+    "zstd": "official zstd 1.5.2 and 1.5.7, GC_REF_ZSTD (ref/build_zstd_ref.py)",
+    "lz4": "official LZ4 1.10.0, GC_REF_LZ4 (ref/build_lz4_ref.py)",
+    "fl2": "official fast-lzma2 1.0.1 and master, GC_REF_FL2 (ref/build_fl2_ref.py)",
+    "brotli": "official Brotli 1.1.0, GC_REF_BROTLI (ref/build_brotli_ref.py)",
+    "brotli-fixtures": "Brotli 1.1.0's test streams, GC_REF_BROTLI (ref/build_brotli_ref.py --fixtures-only)",
+    "7zip": "official 7-Zip 25.01, GC_REF_7ZIP (ref/build_7zip_ref.py)",
+    "7zip-asm": "official 7-Zip 25.01's assembler decoder, lib7zref-asm next to GC_REF_7ZIP (ref/build_7zip_ref.py --asm)",
+    "python-lzma": "Python's lzma module (liblzma, the independent LZMA/LZMA2 decoder)",
+    "python-bz2": "Python's bz2 module (libbzip2, the independent decoder)",
+}
+MISSING = {}  # input -> ids of the tests that went without it
+
+
+def unavailable(name, rid):
+    """Why input `name` can't be had for `rid`, or None if it can."""
+    if name == "7zip-asm" and rid != "win-x64" and "arm64" not in rid:
+        if "x64" not in rid:
+            return "7-Zip has assembler decoders for x86-64 and arm64 only"
+        return "7-Zip's x86-64 decoder is MASM source, which off Windows needs asmc or uasm (not used here)"
+    return None
+
+
+def missing(test, name):
+    """Record that `test` (a TestCase, or its class in setUpClass) left a check out for want of input `name`."""
+    tid = test.id() if isinstance(test, unittest.TestCase) else "%s.%s" % (test.__module__, test.__name__)
+    MISSING.setdefault(name, set()).add(tid)
+
+
+def need(test, name, detail=""):
+    """Skip `test` for want of input `name`, recorded as missing() does. `detail` says what was found instead."""
+    missing(test, name)
+    raise unittest.SkipTest("missing %s: %s%s" % (name, INPUTS[name], ("; " + detail) if detail else ""))
 
 
 def address_sanitizer():

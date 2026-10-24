@@ -26,6 +26,31 @@ from gctest.test_hashes import child
 
 PROPS = [(3, 0, 2, 1 << 20), (0, 0, 0, 4096), (4, 0, 4, 1 << 16), (0, 4, 0, 1 << 16), (1, 3, 1, 65536), (2, 2, 3, 1 << 23)]
 
+# A child's first lines on 64-bit Windows: put this process in a job that limits its committed memory to 1 GiB
+# (JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_PROCESS_MEMORY), so a 4 GiB allocation fails.
+WINDOWS_MEMORY_LIMIT = textwrap.dedent("""
+    import ctypes
+    from ctypes import wintypes as W
+    class Basic(ctypes.Structure):
+        _fields_ = [("PerProcessUserTimeLimit", ctypes.c_int64), ("PerJobUserTimeLimit", ctypes.c_int64),
+                    ("LimitFlags", W.DWORD), ("MinimumWorkingSetSize", ctypes.c_size_t),
+                    ("MaximumWorkingSetSize", ctypes.c_size_t), ("ActiveProcessLimit", W.DWORD),
+                    ("Affinity", ctypes.c_size_t), ("PriorityClass", W.DWORD), ("SchedulingClass", W.DWORD)]
+    class Extended(ctypes.Structure):
+        _fields_ = [("Basic", Basic), ("IoInfo", ctypes.c_uint64 * 6), ("ProcessMemoryLimit", ctypes.c_size_t),
+                    ("JobMemoryLimit", ctypes.c_size_t), ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                    ("PeakJobMemoryUsed", ctypes.c_size_t)]
+    k = ctypes.WinDLL("kernel32", use_last_error=True)
+    k.CreateJobObjectW.restype = k.GetCurrentProcess.restype = W.HANDLE
+    k.SetInformationJobObject.argtypes = [W.HANDLE, ctypes.c_int, ctypes.c_void_p, W.DWORD]
+    k.AssignProcessToJobObject.argtypes = [W.HANDLE, W.HANDLE]
+    job, info = k.CreateJobObjectW(None, None), Extended()
+    info.Basic.LimitFlags, info.ProcessMemoryLimit = 0x100, 1 << 30
+    if not (job and k.SetInformationJobObject(job, 9, ctypes.byref(info), ctypes.sizeof(info))
+            and k.AssignProcessToJobObject(job, k.GetCurrentProcess())):
+        raise OSError("job memory limit: error %d" % ctypes.get_last_error())
+""")
+
 
 def corpus():
     return [("empty", b""), ("1 byte", b"x"), ("text 1000", sample.text(1000)), ("text 50000", sample.text(50000)),
@@ -46,7 +71,16 @@ class LzmaDecTests(unittest.TestCase):
 
     def need_lzma(self):
         if D.lzma is None:
-            self.skipTest("this Python has no lzma module")
+            gctest.need(self, "python-lzma")
+
+    def official(self):
+        """The official 7-Zip decoders to compare with (D.references), recording the C or assembler one if missing."""
+        labels = [label for label, _ in self.refs]
+        if "official C" not in labels:
+            gctest.missing(self, "7zip")
+        if "official asm" not in labels:
+            gctest.missing(self, "7zip-asm")
+        return self.refs
 
     def decode_everywhere(self, kind, props, stream, data, end_mark=True, label=""):
         """Every entry point, several step sizes: the output must be `data` and all of `stream` consumed."""
@@ -113,7 +147,9 @@ class LzmaDecTests(unittest.TestCase):
         self.decode_everywhere("lzma2", prop, stream, data, label="blocks")
         noise = sample.noise(150000, seed=9)
         self.decode_everywhere("lzma2", 0, D.uncompressed_lzma2(noise), noise, label="uncompressed")
-        if D.lzma is not None:
+        if D.lzma is None:
+            gctest.missing(self, "python-lzma")
+        else:
             a, b = sample.text(70000, seed=1), sample.runs(90000, seed=2)
             pa, sa = D.xz_lzma2(a, dict_bytes=1 << 16)
             pb_, sb = D.xz_lzma2(b, dict_bytes=1 << 18)
@@ -127,7 +163,7 @@ class LzmaDecTests(unittest.TestCase):
         after each chunk header, FINISHED_WITH_MARK at the end byte."""
         streams = [("blocks",) + D.gc_lzma2_blocks(self.L, sample.mixed(300000, seed=3), level=3, block=50000, threads=2),
                    ("uncompressed", 0, D.uncompressed_lzma2(sample.noise(100000, seed=4)))]
-        apis = [("GrindCore", self.A)] + self.refs
+        apis = [("GrindCore", self.A)] + self.official()
         for name, prop, stream in streams:
             want = []
             for off, c, unpack, pack, p in D.lzma2_chunks(stream):
@@ -194,7 +230,7 @@ class LzmaDecTests(unittest.TestCase):
                 self.assertEqual(tuple(g if w is not None else None for g, w in zip(got, want)), want, short(r))
                 self.assertTrue(r.out == data[:len(r.out)], "output isn't a prefix of the data")
                 self.assertFalse(r.overrun)
-                for an, ref in self.refs:
+                for an, ref in self.official():
                     self.assertEqual(r[:5], D.one_shot(ref, kind, props, src, cap, fin)[:5], "differs from " + an)
 
     def test_streaming_stops_at_the_end(self):
@@ -266,7 +302,7 @@ class LzmaDecTests(unittest.TestCase):
         data = sample.text(30000, seed=8)
         streams = [("lzma",) + D.gc_lzma(self.L, data, end_mark=1),
                    ("lzma2",) + D.gc_lzma2_blocks(self.L, data, level=5, block=1 << 30, threads=1)]
-        for an, a in [("GrindCore", self.A)] + self.refs:
+        for an, a in [("GrindCore", self.A)] + self.official():
             for kind, props, s in streams:
                 with self.subTest(decoder=an, kind=kind):
                     d = a.new(kind)
@@ -320,7 +356,7 @@ class LzmaDecTests(unittest.TestCase):
                     self.assertEqual(r.rc, want_rc, short(r))
                     if want_rc == 0:
                         self.assertTrue(r.out == data)
-                for an, ref in self.refs:
+                for an, ref in self.official():
                     self.assertEqual(r[:5], D.one_shot(ref, "lzma2", prop, s, len(data) + 200, D.FINISH_ANY)[:5], an)
 
     def test_decoder_reuse_and_free(self):
@@ -359,8 +395,10 @@ class LzmaDecTests(unittest.TestCase):
 
     def test_allocation_failure(self):
         """A dictionary that can't be allocated is SZ_ERROR_MEM, with nothing left allocated (LzmaDec_Allocate frees
-        the probabilities too). On 32-bit, 4 GiB - 1 can't be; on 64-bit Linux and macOS it runs in a child with a 1 GiB
-        address-space limit (RLIMIT_AS); elsewhere it's skipped, so as not to commit 4 GiB."""
+        the probabilities too). On 32-bit, 4 GiB - 1 can't be. On 64-bit it runs in a child that can't get 4 GiB:
+        Linux with a 1 GiB address-space limit (RLIMIT_AS); macOS with one 1 GiB above the address space it already
+        has, since it refuses any lower (a process starts with hundreds of GiB there, the shared cache); Windows in a
+        job that limits its committed memory to 1 GiB."""
         code = textwrap.dedent("""
             from gctest import lzmadec_util as D
             A = D.Api(L)
@@ -377,8 +415,25 @@ class LzmaDecTests(unittest.TestCase):
             self.skipTest("AddressSanitizer: its shadow memory doesn't fit a 1 GiB address-space limit")
         elif sys.platform.startswith("linux"):
             prefix = "import resource\nresource.setrlimit(resource.RLIMIT_AS, (1 << 30, 1 << 30))\n"
+        elif sys.platform == "darwin":
+            # The smallest limit macOS accepts is the address space in use, which ps understates under Rosetta (33 GiB
+            # shown, about 418 GiB counted): bisect for it to 1 GiB, then allow 1 GiB more.
+            prefix = textwrap.dedent("""
+                import resource
+                hard = resource.getrlimit(resource.RLIMIT_AS)[1]
+                def fits(n):
+                    try:
+                        resource.setrlimit(resource.RLIMIT_AS, (n, hard))
+                        return True
+                    except (ValueError, OSError):
+                        return False
+                lo, hi = 0, 1 << 44
+                while hi - lo > 1 << 30:
+                    lo, hi = (lo, (lo + hi) // 2) if fits((lo + hi) // 2) else ((lo + hi) // 2, hi)
+                assert fits(hi + (1 << 30))
+            """)
         else:
-            self.skipTest("64-bit %s: no address-space limit to make a 4 GiB allocation fail" % sys.platform)
+            prefix = WINDOWS_MEMORY_LIMIT
         rc, out, err = child(prefix + code, timeout=120)
         self.assertEqual(rc, 0, err[-2000:])
         self.assertEqual(out.split(), ["lzma", "2", "True", "True", "lzma2", "2", "True", "True"])
@@ -392,7 +447,8 @@ class LzmaDecTests(unittest.TestCase):
         written past the output. On win-x64 GrindCore's assembler decoder is compared with official 7-Zip's
         assembler decoder and with its C decoder."""
         if not self.refs:
-            self.skipTest("no official 7-Zip: " + "; ".join(self.ref_errors))
+            gctest.need(self, "7zip", "; ".join(self.ref_errors))
+        self.official()
         code = """
             import json
             from gctest import lzmadec_util as D

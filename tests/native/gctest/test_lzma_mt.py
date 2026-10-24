@@ -90,7 +90,9 @@ class LzmaMtTests(unittest.TestCase):
         r = D.one_shot(self.A, "lzma2", prop, stream, len(data), D.FINISH_END)
         self.assertEqual((r.rc, r.status), (0, D.FINISHED_WITH_MARK), label)
         self.assertTrue(r.out == data, label + ": GrindCore decoded other data")
-        if U.lzma is not None:
+        if U.lzma is None:
+            gctest.missing(self, "python-lzma")
+        else:
             out, err = U.py_decode(stream, prop)
             self.assertIsNone(err, label)
             self.assertTrue(out == data, label + ": liblzma decoded other data")
@@ -174,7 +176,9 @@ class LzmaMtTests(unittest.TestCase):
                 resets = [c for c in D.lzma2_chunks(first) if c[1] == 1 or c[1] >= 0xE0]
                 self.assertEqual(len(resets), (len(data) + BLOCK - 1) // BLOCK, "one dictionary reset per block")
                 self.decodes(prop, first, data, "blocks")
-                if self.ref:
+                if not self.ref:
+                    gctest.missing(self, "7zip")
+                else:
                     self.assertTrue(self.encode2(data, level, 4, 1, BLOCK, side="ref") == (prop, first),
                                     "differs from official 7-Zip")
 

@@ -5,12 +5,26 @@ The plan, the results and the findings are in the audit's notes, the `grindcore-
 `audit/<topic>.md` references in the code are to that repo). They aren't needed to run anything here.
 
 ```
-python -m gctest --lib <libGrindCore.so | GrindCore.dll | libGrindCore.dylib> [-v] [-k pattern]... [--json out.json]
+python -m gctest --lib <libGrindCore.so | GrindCore.dll | libGrindCore.dylib> [-v] [--refs DIR] [--rid RID]
+       [-k pattern,...] [--without input,...] [--json out.json]
 ```
 
-Run it from this folder, or run `gctest/__main__.py` by its path from anywhere. `-k` can be repeated, and tests
-matching any of the patterns run (e.g. `-k zstd` while working on zstd). Without references (below), the
-comparisons against official libraries skip, each giving its reason.
+Run it from this folder, or run `gctest/__main__.py` by its path from anywhere.
+- **`python`** in these commands means whichever command runs Python 3.6+ on your machine: `python3`, `python` or
+  `py -3`. Check with `--version`. On Windows, `python3` may be the Microsoft Store's stub rather than a Python, and
+  Python is often installed without being on PATH (look in `C:\Python3*` or `%LOCALAPPDATA%\Programs\Python`). On
+  CentOS 7, `python` is Python 2. The workspace's host scripts find it the same way (`hosts/find-python.sh`).
+- **`-k`** takes a comma-separated list and can be repeated; tests whose id contains any of the patterns run (e.g.
+  `-k zstd,lzma2_flush` while working on those).
+- **`--refs DIR`** finds every reference (below) for the RID: `DIR/out-<rid>/` and `DIR/tb/`, laid out as the
+  builders' `--out` writes them (the workspace's `tools/native-test/ref`). A `GC_REF_*` already set wins.
+- **`--rid`** names the RID where the process can't tell: `linux-x64-legacy` and `linux-arm64-legacy` look like
+  `linux-x64` and `linux-arm64` at run time.
+- **A run fails if a test went without an input it needs** (a reference, Brotli's test streams, a Python module:
+  `gctest.INPUTS`), whether the test skipped or only left a check out. The exceptions are inputs that can't exist
+  for the RID (`gctest.unavailable()`: 7-Zip's assembler decoder off x86-64 Windows and arm64) and those named by
+  `--without` (comma-separated; `all` for any). So a reference a run forgot can't pass as a skip.
+- **The end of every run lists the skips by kind:** known defects, missing inputs, and any other, with its reason.
 
 ## Design rules
 
@@ -29,6 +43,10 @@ comparisons against official libraries skip, each giving its reason.
 
   Self-consistency alone isn't trusted. A golden-value test would have missed the BZip2 `FLUSH`/`FINISH` bug, which
   showed up as an error, not wrong bytes.
+- **Every test runs on every RID.** A skip is for a known defect, or for something that can't apply to that build
+  (an export the shipped binaries lack, a sanitizer build), never for a missing input or a platform the test
+  wasn't written for. Inputs go through `gctest.need()` (skips) or `gctest.missing()` (a check left out), never a
+  bare `skipTest` or a silent `if ... is not None`.
 - **Known defects:** `gctest.KNOWN_DEFECTS` plus `known()`.
   - A library that still has a documented defect (e.g. a release built before the fix) reports it as a skip; a
     fixed library must pass.
@@ -46,11 +64,18 @@ comparisons against official libraries skip, each giving its reason.
   - `alloc()` for structs that need more alignment than ctypes gives (`CBlake2sp`: 64).
 - `gcnative/_spec.py` is **generated**; don't edit it. `python gen_bindings.py [--db codemap.db]` writes it from the
   code map (the workspace's `tools/codemap`; by default its `out/codemap.db`, with GrindCore checked out as the
-  workspace's submodule). `gcnative.OVERRIDES` carries prototypes that changed on the audit branch.
+  workspace's submodule) and from `layouts/` (below). `gcnative.OVERRIDES` carries prototypes that changed on the
+  audit branch. Running the suite needs only the committed `_spec.py`; regenerating it needs the code map.
   - Symbols = `entrypoints.c` ∪ dllexport ∪ GrindCore.net's P/Invokes, each tagged with its source.
-  - Types come from the win-x64 and win-x86 maps: whatever differs in width is `size_t`. There's no C `long` in the API.
+  - Types come from the win-x64 and win-x86 maps: whatever differs in width is `size_t`. C's `long` is a type of its
+    own (`long`/`ulong`, ctypes' `c_long`): 4 bytes on Windows and 32-bit targets, 8 on 64-bit Linux and macOS
+    (`FL2_dictBuffer.size`). Enums declared through a typedef are listed by hand (`ENUM_TYPEDEFS`), and any other
+    unknown type stops the generator.
   - Anonymous unions have no record in the code map; `gen_bindings.py` lists them (`ANONYMOUS`), and the layout
     check verifies them.
+  - **Layouts per RID:** `layouts/<rid>.json`, one per RID, from `probe_layouts.py` (below). `test_abi`'s
+    `test_struct_layouts_match_the_build` compares ctypes' size, field offsets and field widths for every spec struct
+    with them, on every RID.
 - `gctest/test_*.py` are the tests, and `gctest/*_util.py` drive each codec identically through GrindCore or a
   reference (`zstd_util.drive()`, `brotli_util.Api`, `lzmadec_util.Api`).
 - `loadso.c` loads `libGrindCore.so` as a plain C program would (no `-lm`, no `-lpthread`, `RTLD_NOW`):
@@ -58,6 +83,7 @@ comparisons against official libraries skip, each giving its reason.
 - Other tools:
   - `leakcheck.py`: Valgrind, or `leaks` on macOS;
   - `determinism.py`: hashes compressed output to compare builds and RIDs;
+  - `probe_layouts.py`: struct layouts as GrindCore.build compiles them, per RID (below);
   - `bench_*.py`, speed;
   - `fl2_timeout_stress.py`;
   - `arch_limits.py`: the architecture limitations (dictionary limits by pointer width, LZ4's fast-mode levels) as
@@ -75,10 +101,10 @@ below, keep the references, and run each Linux RID in the image GrindCore.build 
 
 | RID | Where | How |
 |---|---|---|
-| linux-* (all 6) | the RID's build environment (GrindCore.build's Dockerfile, or the CI runner) on a host of that architecture | `python3 -B -m gctest -v --lib <tree>/artifacts/bin/<rid>/native/libGrindCore.so`, after `loadso.c` |
+| linux-* (all 6) | the RID's build environment (GrindCore.build's Dockerfile, or the CI runner) on a host of that architecture | `python3 -B -m gctest -v --refs <refs> --rid <rid> --lib <tree>/artifacts/bin/<rid>/native/libGrindCore.so`, after `loadso.c` |
 | osx-arm64, osx-x64 | a Mac | osx-arm64: `/usr/bin/python3`. osx-x64: an x86_64 Python ([python-build-standalone](https://github.com/astral-sh/python-build-standalone)) under `arch -x86_64`, so Rosetta |
-| win-x64 | Windows x64 | `python -B -m gctest -v --lib …\win-x64\native\GrindCore.dll` |
-| win-x86 | Windows x64 | python.org's 32-bit *embeddable* zip, unpacked: `<python>\python.exe -B gctest\__main__.py -v --lib …` |
+| win-x64 | Windows x64 | `python -B gctest\__main__.py -v --refs <refs> --lib …\win-x64\native\GrindCore.dll` |
+| win-x86 | Windows x64 | python.org's 32-bit *embeddable* zip, unpacked: `<python>\python.exe -B gctest\__main__.py -v --refs <refs> --lib …` |
 | win-arm64 | Windows on ARM | the ARM64 embeddable zip, as for win-x86. win-x64 also runs there under Prism with an ordinary x64 Python |
 
 - **Embeddable Pythons:** `-m gctest` fails with "No module named gctest", because their `._pth` file drops the
@@ -93,13 +119,42 @@ below, keep the references, and run each Linux RID in the image GrindCore.build 
   - Crash probes in child processes recognise a sanitizer's `DEADLYSIGNAL` exit.
   - The workspace's `tools/native-build` does all of this with `SAN=1 hosts/native-tests.sh`.
 
+## Struct layouts per RID (`probe_layouts.py`)
+
+`layouts/<rid>.json` hold each spec struct's layout as GrindCore.build compiles it for that RID: size, alignment, and
+every field's offset and width. `probe_layouts.py` measures them from the compile commands GrindCore.build's own
+CMake writes (`<tree>/artifacts/obj/native/<rid>/compile_commands.json`). For each C unit that includes a spec
+struct's header, it compiles a probe with that unit's exact command: the unit's preprocessor lines, then a table of
+`sizeof`/`offsetof` values. It reads the table back out of the object file. Nothing is linked or run, and nothing is
+written into the build. All units that see a struct must agree.
+
+- **This is a check, not a build step.** The build never runs it or reads `layouts/`. It confirms that the bindings
+  match what GrindCore.build's compilers and flags produce on every RID (MSVC's `/Zp8`, i386's 4-byte alignment of
+  64-bit fields, `long`'s width). If a flag ever changes a layout, the fix belongs in GrindCore.build's CMake or in
+  the code.
+- **Rerun it** when a spec struct's header changes, or GrindCore.build's compiler or flags change. Run it for each
+  RID in that RID's build environment, with the tree at the path it was built at (the commands hold absolute paths):
+
+  ```
+  python probe_layouts.py --cc-json <tree>/artifacts/obj/native/<rid>/compile_commands.json --rid <rid>
+  python gen_bindings.py
+  ```
+
+  On Windows it sets up MSVC from the commands' own `cl.exe` (that Visual Studio, toolset version and host/target
+  pair). The workspace's `tools/native-build/hosts/layout-probe.sh` runs it for each RID in its build image.
+- `gen_bindings.py` stops if two RIDs that share a run-time name (`linux-x64` and `linux-x64-legacy`) disagree. It
+  also stops if the win-x64 or win-x86 numbers differ from clang's in the code map.
+
 ## References (official libraries, built from pinned sources)
+
+Every RID has all of them (2026-10-17). `--refs` sets the variables; each can also be set by hand.
 
 | Variable | Builder | What |
 |---|---|---|
+| `GC_REF_ZLIB` (folder) | `ref/build_zlib_ref.py` | zlib 1.3.1 and zlib-ng 2.2.1 (its own CMake, with GrindCore's options: compat mode, no ARMv6/RVV) |
 | `GC_REF_ZSTD` (folder) | `ref/build_zstd_ref.py` | zstd 1.5.2 and 1.5.7 plus `contrib/seekable_format`, from the SHA-256-checked tarballs |
 | `GC_REF_LZ4` (folder) | `ref/build_lz4_ref.py` | LZ4 1.10.0 |
-| `GC_REF_BROTLI` (folder) | `ref/build_brotli_ref.py` | Brotli 1.1.0 and its 44 test streams. `--fixtures-only` gives the streams without a library |
+| `GC_REF_BROTLI` (folder, or several with `os.pathsep`) | `ref/build_brotli_ref.py` | Brotli 1.1.0 and its 44 test streams. `--fixtures-only` gives the streams without a library |
 | `GC_REF_FL2` (folder) | `ref/build_fl2_ref.py` | Fast-LZMA2 1.0.1 and master `967306d3`; `--asm` adds the x86-64 assembler decoder |
 | `GC_REF_7ZIP` (file) | `ref/build_7zip_ref.py` | 7-Zip 25.01's LZMA/LZMA2; `--asm` adds the assembler decoder (win-x64, arm64) |
 
@@ -111,12 +166,15 @@ below, keep the references, and run each Linux RID in the image GrindCore.build 
   GrindCore.build's `init-compiler.sh` does: the newest `clang-N`.
 - **linux-x86:** build the references with `--cflags="-msse2 -mfpmath=sse"`, as GrindCore.build builds linux-x86.
   x87 references differ in Brotli Q10/11 and zstd 1.5.2 L5/L9.
-- **Legacy (CentOS 7):** 7-Zip's, zstd's and LZ4's references build in the legacy images (since 2026-10-10;
-  references built elsewhere need a newer glibc). On the arm64 one, pass `--cc /opt/rh/devtoolset-8/root/usr/bin/gcc`:
-  CentOS's gcc 4.8.5 can't compile 7-Zip's `CpuArch.c`, and devtoolset-11 is empty.
-- **Windows:** `build_7zip_ref.py`, `build_zstd_ref.py` and `build_lz4_ref.py` use MSVC through vswhere
-  (`ref/msvc.py`; `--arch x64/x86/arm64`, cross-compiling arm64 on an x64 host). Each DLL exports, through a `.def`,
-  exactly the functions the tests bind (`REF_FUNCTIONS` in `gctest/zstd_util.py` and `gctest/lz4_util.py`).
+- **Legacy (CentOS 7):** every reference builds in the legacy images (references built elsewhere need a newer glibc).
+  Brotli's, Fast-LZMA2's and zlib's use the images' clang 7.0.1 (`/opt/rh/llvm-toolset-7.0`), which builds GrindCore
+  there. For 7-Zip's on the arm64 one, pass `--cc /opt/rh/devtoolset-8/root/usr/bin/gcc`: CentOS's gcc 4.8.5 can't
+  compile 7-Zip's `CpuArch.c`, and devtoolset-11 is empty.
+- **Windows:** every builder uses MSVC through vswhere (`ref/msvc.py`; `--arch x64/x86/arm64`, cross-compiling arm64 on
+  an x64 host, as GrindCore's win-arm64 build is). DLLs export, through a `.def`, exactly the functions the tests bind
+  (`REF_FUNCTIONS` in `gctest/zstd_util.py`, `lz4_util.py`, `brotli_util.py` and `test_zlib.py`); Fast-LZMA2's header
+  and zlib-ng's CMake export their APIs themselves. Brotli's is compiled with the options GrindCore's build gives it
+  (`/O2 /Ob2 /Ox /Oi /fp:precise /GL`), for the compiler-dependent Q10/Q11 output.
 
 ## The vendored libraries' own test suites (`ref/upstream_tests.py`)
 
@@ -154,7 +212,8 @@ covered (the suites are make- and shell-based); the native suite covers Windows.
   GrindCore frame (`--save` keeps Valgrind's full output).
   - Use Valgrind 3.22+, which means `ubuntu:24.04`: 3.18 can't read the clang-15 builds' DWARF 5.
   - On ARM32, use Debian 12; Python 3.13 (Debian 13) segfaults under Valgrind at startup.
-  - `-k <codec>` limits it to that codec's tests.
+  - `-k <codec>,...` limits it to those tests. `--refs`/`--rid` work as for the suite, so the tests that compare
+    with official libraries run under Valgrind too (and with them the GrindCore code they call).
   - Valgrind doesn't follow child processes, so the corrupt-input sweeps have `--scenario` equivalents, e.g.
     `--scenario lzma_decoders`.
 - **macOS:** `leaks`, run on the framework's real Python binary, because the Command Line Tools' `python3` is a

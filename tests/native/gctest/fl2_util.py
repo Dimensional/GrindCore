@@ -341,9 +341,10 @@ class DStream(object):
 
 
 class DictBuffer(ctypes.Structure):
-    """FL2_dictBuffer: its size is `unsigned long` (fast-lzma2.h:218), 4 bytes on Windows and 8 on Linux and macOS.
-    The generated spec, parsed on Windows, has 32 bits, so this is declared here with c_ulong. (GrindCore.net's
-    FL2DictBuffer uses nuint, which is wrong on Windows; it's unused.)"""
+    """FL2_dictBuffer: its size is `unsigned long` (fast-lzma2.h:218), 4 bytes on Windows and 8 on 64-bit Linux and
+    macOS, so c_ulong. The generated spec has it as `ulong` too since the per-RID layouts (2026-10-24; before, it said
+    32 bits, from the Windows parse), and test_abi checks that width on every RID. (GrindCore.net's FL2DictBuffer
+    uses nuint, which is wrong on Windows; it's unused.)"""
     _fields_ = [("dst", ctypes.c_void_p), ("size", ctypes.c_ulong)]
 
 

@@ -167,12 +167,13 @@ SCENARIOS = [scenario_lzma2_prepare_after_mt_encode, scenario_lzma_streams_aband
              scenario_zlib_bzip2_error_paths, scenario_lzma_decoders_corrupt]
 
 
-def run_inside(lib, pattern, scenarios_only, only=None):
+def run_inside(lib, pattern, scenarios_only, only=None, rid=None):
     """The checked process: the suite (tests that don't need a child process), then the scenarios."""
     sys.path.insert(0, HERE)
     import gcnative
     import gctest
     import unittest
+    gctest.RID = rid or gcnative.target()
     gctest.LIB = L = gcnative.load(lib)
     if not scenarios_only:
         suite = unittest.defaultTestLoader.discover(os.path.join(HERE, "gctest"), pattern="test_*.py", top_level_dir=HERE)
@@ -186,6 +187,9 @@ def run_inside(lib, pattern, scenarios_only, only=None):
         r = unittest.TextTestRunner(verbosity=0, stream=sys.stdout).run(unittest.TestSuite(chosen))
         print("LEAKCHECK suite: %d tests, %d failures, %d errors, %d skipped" % (
             r.testsRun, len(r.failures), len(r.errors), len(r.skipped)), flush=True)
+        if gctest.MISSING:
+            print("LEAKCHECK suite: went without %s" % ", ".join(
+                "%s (%d)" % (k, len(v)) for k, v in sorted(gctest.MISSING.items())), flush=True)
     for s in SCENARIOS:
         if not only or any(o in s.__name__ for o in only):
             print("LEAKCHECK scenario %s: %s" % (s.__name__, s(L)), flush=True)
@@ -216,21 +220,32 @@ def gc_records(text):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--lib", required=True)
-    ap.add_argument("-k", dest="pattern", action="append", help="only suite tests whose id contains this (repeatable)")
+    ap.add_argument("-k", dest="pattern", action="append",
+                    help="only suite tests whose id contains one of these (comma-separated, repeatable)")
+    ap.add_argument("--refs", help="a folder of references, as gctest's --refs (out-<rid>/ and tb/)")
+    ap.add_argument("--rid", help="the library's RID, as gctest's --rid")
     ap.add_argument("--scenarios-only", action="store_true")
-    ap.add_argument("--scenario", action="append", help="only scenarios whose name contains this (repeatable). On "
-                    "shipped builds the LZMA scenarios in sequence hang in the multicallMode defect (lzma.md 3.3): "
-                    "e.g. --scenario zlib")
+    ap.add_argument("--scenario", action="append", help="only scenarios whose name contains one of these "
+                    "(comma-separated, repeatable). On shipped builds the LZMA scenarios in sequence hang in the "
+                    "multicallMode defect (lzma.md 3.3): e.g. --scenario zlib")
     ap.add_argument("--no-checker", action="store_true")
     ap.add_argument("--save", help="write the checker's complete output here")
     ap.add_argument("--inside", action="store_true", help=argparse.SUPPRESS)
     a = ap.parse_args()
+    a.pattern = [x for p in a.pattern or [] for x in p.split(",") if x] or None
+    a.scenario = [x for p in a.scenario or [] for x in p.split(",") if x] or None
     if a.inside or a.no_checker:
-        run_inside(os.path.abspath(a.lib), a.pattern, a.scenarios_only, a.scenario)
+        run_inside(os.path.abspath(a.lib), a.pattern, a.scenarios_only, a.scenario, a.rid)
         return 0
+    if a.refs:  # in the environment, so the checked process and its children have them
+        sys.path.insert(0, HERE)
+        import gcnative
+        from gctest.__main__ import set_refs
+        d, done = set_refs(a.refs, a.rid or gcnative.target())
+        print("references: %s%s" % (d or "no folder in %s" % a.refs, " (set %s)" % ", ".join(done) if done else ""))
     me = [real_executable(), os.path.abspath(__file__), "--inside", "--lib", os.path.abspath(a.lib)] + \
         [x for p in (a.pattern or []) for x in ("-k", p)] + (["--scenarios-only"] if a.scenarios_only else []) + \
-        [x for s in (a.scenario or []) for x in ("--scenario", s)]
+        [x for s in (a.scenario or []) for x in ("--scenario", s)] + (["--rid", a.rid] if a.rid else [])
     env = dict(os.environ, PYTHONMALLOC="malloc")
     marker = os.path.basename(a.lib).split(".")[0]  # libGrindCore / GrindCore
     if sys.platform == "darwin":

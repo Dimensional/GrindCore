@@ -5,6 +5,7 @@ compress3/uncompress3 (compress2/uncompress2 with deflateInit2/inflateInit2 para
 an independent decoder, Python's zlib, and by the other GrindCore zlib. zlib-ng's NEON Adler-32 faults on the shipped
 linux-arm build (platforms.md 10.7); that is probed once in a child process and reported as a known defect."""
 import ctypes
+import os
 import sys
 import zlib
 import unittest
@@ -157,6 +158,74 @@ class Zlib(object):
         return self.fn("Crc32")(crc, addr, len(data))
 
 
+# ------------------------------------------------------------------ official zlib 1.3.1 and zlib-ng 2.2.1
+
+
+class ZStream(ctypes.Structure):
+    """zlib's z_stream (zlib.h), which zlib-ng's compat mode keeps."""
+    _fields_ = [("next_in", ctypes.c_void_p), ("avail_in", ctypes.c_uint), ("total_in", ctypes.c_ulong),
+                ("next_out", ctypes.c_void_p), ("avail_out", ctypes.c_uint), ("total_out", ctypes.c_ulong),
+                ("msg", ctypes.c_char_p), ("state", ctypes.c_void_p), ("zalloc", ctypes.c_void_p),
+                ("zfree", ctypes.c_void_p), ("opaque", ctypes.c_void_p), ("data_type", ctypes.c_int),
+                ("adler", ctypes.c_ulong), ("reserved", ctypes.c_ulong)]
+
+
+# Every official function the tests call. ref/build_zlib_ref.py exports exactly these from zlib's Windows DLL (MSVC
+# needs a .def); zlib-ng's CMake exports its whole API, and off Windows every global symbol is exported anyway.
+_vp, _int, _ulong, _zs = ctypes.c_void_p, ctypes.c_int, ctypes.c_ulong, ctypes.POINTER(ZStream)
+REF_FUNCTIONS = [
+    ("zlibVersion", ctypes.c_char_p, []),
+    ("compressBound", _ulong, [_ulong]),
+    ("compress2", _int, [_vp, ctypes.POINTER(_ulong), _vp, _ulong, _int]),
+    ("deflateInit2_", _int, [_zs, _int, _int, _int, _int, _int, ctypes.c_char_p, _int]),
+    ("deflate", _int, [_zs, _int]),
+    ("deflateEnd", _int, [_zs]),
+]
+REF_FILES = {"zlib 1.3.1": "libzlibref-1.3.1", "zlib-ng 2.2.1": "libzlibngref-2.2.1"}
+
+
+class Ref(object):
+    """Official zlib or zlib-ng by their own names."""
+
+    def __init__(self, path):
+        self.dll = ctypes.CDLL(path)
+        for name, res, args in REF_FUNCTIONS:
+            fn = getattr(self.dll, name)
+            fn.restype, fn.argtypes = res, args
+        self.version = self.dll.zlibVersion().decode()
+
+    def compress(self, data, level):
+        n = ctypes.c_ulong(self.dll.compressBound(len(data)))
+        dst = ctypes.create_string_buffer(n.value)
+        rc = self.dll.compress2(dst, ctypes.byref(n), data, len(data), level)
+        return rc, dst.raw[:n.value]
+
+    def deflate(self, data, level, wbits, mem, strategy):
+        """One deflateInit2 and one deflate(Z_FINISH) into room for everything: (rc, output)."""
+        s = ZStream()
+        rc = self.dll.deflateInit2_(ctypes.byref(s), level, DEFLATED, wbits, mem, strategy, b"1.3.1", ctypes.sizeof(s))
+        if rc != Z_OK:
+            return rc, b""
+        cap = self.dll.compressBound(len(data)) + 64    # gzip's header and trailer, beyond compressBound's zlib framing
+        src, dst = ctypes.create_string_buffer(data, max(len(data), 1)), ctypes.create_string_buffer(cap)
+        s.next_in, s.avail_in = ctypes.cast(src, _vp), len(data)
+        s.next_out, s.avail_out = ctypes.cast(dst, _vp), cap
+        rc = self.dll.deflate(ctypes.byref(s), Z_FINISH)
+        out = dst.raw[:cap - s.avail_out]
+        self.dll.deflateEnd(ctypes.byref(s))
+        return rc, out
+
+
+def reference(name):
+    """Official `name` ("zlib 1.3.1" or "zlib-ng 2.2.1") from $GC_REF_ZLIB, or None."""
+    folder = os.environ.get("GC_REF_ZLIB")
+    if not folder:
+        return None
+    ext = ".dylib" if sys.platform == "darwin" else ".dll" if sys.platform == "win32" else ".so"
+    path = os.path.join(folder, REF_FILES[name] + ext)
+    return Ref(path) if os.path.exists(path) else None
+
+
 class _ZlibTests(object):
     """The same tests for both libraries; the subclasses pick one."""
     NAME = PREFIX = None
@@ -168,6 +237,7 @@ class _ZlibTests(object):
         # the other zlib cross-checks every stream, unless it is zlib-ng on a build where it crashes
         cls.others = [Zlib(gctest.LIB, n, p) for n, p in LIBS
                       if p != cls.PREFIX and (p != LIBS[1][1] or zlibng_state()[0] == "ok")]
+        cls.ref = reference(cls.NAME)
 
     def setUp(self):
         if self.probe is not None:
@@ -464,21 +534,36 @@ class _ZlibTests(object):
         self.assertEqual(self.z.uncompress(stream, len(data), ZLIB, "3"), self.z.uncompress(stream, len(data), variant="2"),
                          "Uncompress3(15) = Uncompress2")
 
-    def test_matches_python_zlib_when_it_is_the_same_algorithm(self):
-        """An independent build as a reference: Python's own zlib, when it is zlib 1.3.1 (e.g. Debian 13), or zlib-ng
-        at a version measured to produce identical deflate output: 2.2.4 (CPython 3.14's Windows builds) on 64-bit
-        only. On 32-bit, 2.2.1 and 2.2.4 take different match-finder paths (2.2.1's 4-byte UNALIGNED_OK compare,
-        2.2.4's OPTIMAL_CMP rewrite): measured on win-x86, levels 3-4 differ by a few bytes, both valid."""
+    def test_output_matches_official(self):
+        """Byte-identical to the official release built by ref/build_zlib_ref.py: Compress2 at every level, and the
+        stream deflate for each framing and window, memory level and strategy.
+        Where this Python's zlib is the same algorithm, it's checked too, as a build of its own: zlib 1.3.1 (e.g. Debian
+        13), or zlib-ng 2.2.1, or 2.2.4 (CPython 3.14's Windows builds) on 64-bit only. On 32-bit, 2.2.1 and 2.2.4 take
+        different match-finder paths (2.2.1's 4-byte UNALIGNED_OK compare, 2.2.4's OPTIMAL_CMP rewrite): measured on
+        win-x86, levels 3-4 differ by a few bytes, both valid."""
+        if not self.ref:
+            gctest.need(self, "zlib", "no %s" % self.z.name)
         version, ng = zlib.ZLIB_RUNTIME_VERSION, getattr(zlib, "ZLIBNG_VERSION", None)
         wide = sys.maxsize > 2 ** 32
-        same = version == "1.3.1" if self.z.name == "zlib 1.3.1" else (ng == "2.2.1" or (ng == "2.2.4" and wide))
-        if not same:
-            self.skipTest("Python's zlib is %s%s: no byte-for-byte reference for %s" % (
-                version, " (zlib-ng %s)" % ng if ng else "", self.z.name))
+        same_python = version == "1.3.1" if self.z.name == "zlib 1.3.1" else (ng == "2.2.1" or (ng == "2.2.4" and wide))
         for kind, gen in sample.KINDS:
             data = gen(300000, seed=45)
-            for level in [-1] + list(range(1, 10)):   # level 0's stored blocks follow Python's output buffer size
-                self.assertEqual(self.z.compress(data, level)[1], zlib.compress(data, level), "%s, level %d" % (kind, level))
+            for level in [-1] + list(range(10)):
+                with self.subTest(kind=kind, level=level):
+                    rc, out, _ = self.z.compress(data, level)
+                    self.assertEqual((rc, out), self.ref.compress(data, level), "Compress2 differs from official")
+                    if same_python and level != 0:   # level 0's stored blocks follow Python's output buffer size
+                        self.assertEqual(out, zlib.compress(data, level), "differs from Python's zlib")
+        data = sample.mixed(120000, seed=46)
+        for wbits in (RAW, -9, ZLIB, 10, GZIP, 25):
+            for mem in (1, 8, 9):
+                for strategy in range(5):   # default, filtered, Huffman only, RLE, fixed
+                    for level in (1, 4, 6, 9):
+                        with self.subTest(wbits=wbits, mem=mem, strategy=strategy, level=level):
+                            ref_rc, ref_out = self.ref.deflate(data, level, wbits, mem, strategy)
+                            self.assertEqual(ref_rc, Z_STREAM_END)
+                            self.assertEqual(self.z.deflate(data, level, wbits, mem, strategy)[0], ref_out,
+                                             "deflate differs from official")
 
 
 class ZLib131(_ZlibTests, unittest.TestCase):

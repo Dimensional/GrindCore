@@ -92,12 +92,11 @@ class BrotliTests(unittest.TestCase):
 
     def need_ref(self):
         if not self.ref:
-            self.skipTest("no official Brotli 1.1.0: " + ("; ".join(B.REF_ERROR) or
-                                                          "set GC_REF_BROTLI (ref/build_brotli_ref.py)"))
+            gctest.need(self, "brotli", "; ".join(B.REF_ERROR))
 
     def need_fixtures(self):
         if not self.fix:
-            self.skipTest("no Brotli test fixtures: set GC_REF_BROTLI (ref/build_brotli_ref.py --fixtures-only)")
+            gctest.need(self, "brotli-fixtures")
 
     # ------------------------------------------------------------------ decoding upstream's streams
 

@@ -75,6 +75,7 @@ def main():
     ap.add_argument("--tarballs", help="a folder that may already hold zstd-<version>.tar.gz")
     ap.add_argument("--arch", choices=("x64", "x86", "arm64"), help="Windows: the target (default: this machine)")
     a = ap.parse_args()
+    a.out = os.path.abspath(a.out)  # MSVC compiles in a work folder under it
     os.makedirs(a.out, exist_ok=True)
     for version in a.version or ["1.5.2", "1.5.7"]:
         src = os.path.join(a.out, "zstd-" + version)

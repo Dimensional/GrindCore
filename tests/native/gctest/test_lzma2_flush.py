@@ -85,24 +85,26 @@ class Lzma2FlushTests(unittest.TestCase):
             mid = self.decoded({"prop": r["prop"], "stream": r["stream"][:end] + b"\x00"}, written)
             self.assertTrue(mid == data[:written], "%s: the stream up to a flush (%d bytes in) doesn't decode to "
                                                    "what was written" % (label, written))
-        if U.lzma is not None:
-            def py_decoder():
-                return U.lzma.LZMADecompressor(format=U.lzma.FORMAT_RAW, filters=[
-                    {"id": U.lzma.FILTER_LZMA2, "dict_size": max(4096, min(U.dict_size(r["prop"]), 1 << 30))}])
-            dec = py_decoder()
-            got, pos = bytearray(), 0
-            for written, end in r["marks"]:
-                got += dec.decompress(r["stream"][pos:end])
-                pos = end
-                now = bytes(got)
-                if len(now) < written and PY_LZMA_HOLDS_BACK:
-                    # that Python's hold-back: this prefix on its own, with the end byte, which makes it drain
-                    now = py_decoder().decompress(r["stream"][:end] + b"\x00")
-                self.assertTrue(now == data[:written], "%s: liblzma, %d bytes in: the stream so far gave %d "
-                                                       "bytes, not exactly what was written" % (
-                                                           label, written, len(now)))
-            got += dec.decompress(r["stream"][pos:])
-            self.assertTrue(dec.eof and bytes(got) == data, label + ": liblzma decoded other data")
+        if U.lzma is None:
+            gctest.missing(self, "python-lzma")
+            return r
+
+        def py_decoder():
+            return U.lzma.LZMADecompressor(format=U.lzma.FORMAT_RAW, filters=[
+                {"id": U.lzma.FILTER_LZMA2, "dict_size": max(4096, min(U.dict_size(r["prop"]), 1 << 30))}])
+        dec = py_decoder()
+        got, pos = bytearray(), 0
+        for written, end in r["marks"]:
+            got += dec.decompress(r["stream"][pos:end])
+            pos = end
+            now = bytes(got)
+            if len(now) < written and PY_LZMA_HOLDS_BACK:
+                # that Python's hold-back: this prefix on its own, with the end byte, which makes it drain
+                now = py_decoder().decompress(r["stream"][:end] + b"\x00")
+            self.assertTrue(now == data[:written], "%s: liblzma, %d bytes in: the stream so far gave %d bytes, not "
+                                                   "exactly what was written" % (label, written, len(now)))
+        got += dec.decompress(r["stream"][pos:])
+        self.assertTrue(dec.eof and bytes(got) == data, label + ": liblzma decoded other data")
         return r
 
     def test_write_after_flush_is_kept(self):

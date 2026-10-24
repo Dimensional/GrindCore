@@ -36,7 +36,7 @@ class Lz4Tests(unittest.TestCase):
 
     def need_ref(self):
         if not self.ref:
-            self.skipTest("no official LZ4 1.10.0: set GC_REF_LZ4 (ref/build_lz4_ref.py)")
+            gctest.need(self, "lz4")
 
     def fn(self, name):
         return getattr(self.L, name)

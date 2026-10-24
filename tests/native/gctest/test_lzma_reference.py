@@ -36,7 +36,7 @@ NEWER = ("LzmaEnc_Encode", "Lzma2Enc_SetDataSize")
 
 def need_newer(test, R, name):
     if getattr(R, name) is None:
-        test.skipTest("this lib7zref doesn't export %s: rebuild it with ref/build_7zip_ref.py" % name)
+        gctest.need(test, "7zip", "this lib7zref doesn't export %s: rebuild it" % name)
 
 
 class Ref(object):
@@ -77,8 +77,8 @@ class Reference(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         path = os.environ.get("GC_REF_7ZIP")
-        if not path:
-            raise unittest.SkipTest("GC_REF_7ZIP not set (build the reference with ref/build_7zip_ref.py)")
+        if not path or not os.path.exists(path):
+            gctest.need(cls, "7zip", "%s doesn't exist" % path if path else "")
         cls.R, cls.L, cls.C = Ref(path), gctest.LIB, corpus()
 
     # ---- the encode paths, both sides, same settings ----
@@ -289,7 +289,9 @@ class Reference(unittest.TestCase):
                 rc, out = self.ref_lzma_decode(props, stream, len(data))
                 self.assertEqual(rc, 0)
                 self.assertTrue(out == data, "official 7-Zip decoded %d of %d bytes correctly" % (len(out), len(data)))
-                if U.lzma is not None:
+                if U.lzma is None:
+                    gctest.missing(self, "python-lzma")
+                else:
                     size = (1 << 64) - 1 if end_mark else len(data)
                     py, err = U.py_decode_alone(props + size.to_bytes(8, "little") + stream)
                     self.assertIsNone(err)

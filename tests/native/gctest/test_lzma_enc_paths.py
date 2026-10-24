@@ -179,7 +179,8 @@ def probe(L):
     """
     conventions = (True, False) if sys.platform == "win32" and ctypes.sizeof(vp) == 4 else (False,)
     result = {}
-    for side in ("gc", "ref") if os.environ.get("GC_REF_7ZIP") else ("gc",):
+    ref = os.environ.get("GC_REF_7ZIP")
+    for side in ("gc", "ref") if ref and os.path.exists(ref) else ("gc",):
         if side == "ref" and Ref(os.environ["GC_REF_7ZIP"]).LzmaEnc_Encode is None:
             result[side] = "old"
             continue
@@ -221,10 +222,13 @@ class EncEncode(unittest.TestCase):
         return encode(self.L, data, stdcall=self.stdcall, **kw)
 
     def official(self, data, **kw):
-        """Official 7-Zip's result for the same calls, or None without GC_REF_7ZIP."""
+        """Official 7-Zip's result for the same calls, or None without one (GC_REF_7ZIP; recorded as missing)."""
         if self.ref_broken:
             self.fail(self.ref_broken)
-        return encode(self.L, data, R=self.R, stdcall=self.ref_stdcall, **kw) if self.R else None
+        if not self.R:
+            gctest.missing(self, "7zip")
+            return None
+        return encode(self.L, data, R=self.R, stdcall=self.ref_stdcall, **kw)
 
     def test_callback_convention(self):
         """Informational: the convention a C caller's ISeqInStream/ISeqOutStream/ICompressProgress functions must
@@ -250,7 +254,9 @@ class EncEncode(unittest.TestCase):
                             rc, pr, out, s = self.gc(data, step=step, end_mark=end_mark, data_size=size)
                             self.assertEqual(rc, SZ_OK)
                             self.assertTrue(decode(self.L, pr, out, len(data)) == data, "GrindCore's decoder")
-                            if U.lzma is not None:
+                            if U.lzma is None:
+                                gctest.missing(self, "python-lzma")
+                            else:
                                 got, err = py_decode(pr, out, len(data), end_mark)
                                 self.assertIsNone(err)
                                 self.assertTrue(got == data, "Python's lzma")

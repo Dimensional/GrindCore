@@ -1,28 +1,41 @@
 """Generate gcnative/_spec.py (plain data, committed) from the code map (codemap.db, built by the audit workspace's
-tools/codemap).
+tools/codemap) and the per-RID layouts in layouts/ (probe_layouts.py).
 
 For every entry of entrypoints.c: return and parameter types as portable type codes. For every struct a caller may
-have to allocate or fill (reachable from an export's pointer parameters, defined in a header): its fields, plus the
-clang layout for win-x64 and win-x86 so the runtime can self-check ctypes' layout on those targets.
+have to allocate or fill (reachable from an export's pointer parameters, defined in a header): its fields, its C
+spelling, and its layout per target (size, alignment, field offsets and widths) so the runtime can check ctypes'
+layout on every RID. Layouts come from clang in the code map (win-x64, win-x86) and from GrindCore.build's own
+compiler and flags (layouts/<rid>.json, every RID); where both exist they must agree.
 
-Type codes: void i8 u8 i16 u16 i32 u32 i64 u64 f32 f64 size ssize ptr cstr, or "struct:<name>" / "union:<name>".
-size = anything whose width differs between the win-x64 and win-x86 maps (size_t); ptr = any pointer, array or
-function pointer. Unknown types stop the generator rather than guessing.
+Type codes: void i8 u8 i16 u16 i32 u32 i64 u64 long ulong f32 f64 size ssize ptr cstr, or "struct:<name>" /
+"union:<name>". size = anything whose width differs between the win-x64 and win-x86 maps (size_t); long/ulong = C's
+long, 4 bytes on Windows and 32-bit targets but 8 on 64-bit Linux and macOS; ptr = any pointer, array or function
+pointer. Unknown types stop the generator rather than guessing.
 
-Run after the code map is rebuilt:  python gen_bindings.py [--db codemap.db]
+Run after the code map is rebuilt or a layouts/ file changes:  python gen_bindings.py [--db codemap.db]
 (the default is the workspace's tools/codemap/out/codemap.db, with GrindCore checked out as its submodule)
 """
-import argparse, re, sqlite3, sys
+import argparse, json, re, sqlite3, sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 DB = HERE.parents[2] / "tools" / "codemap" / "out" / "codemap.db"
 OUT = HERE / "gcnative" / "_spec.py"
+LAYOUT_DIR = HERE / "layouts"
 
 INTS = {
     "char": "i8", "signed char": "i8", "unsigned char": "u8", "_Bool": "u8", "bool": "u8",
     "short": "i16", "unsigned short": "u16", "int": "i32", "unsigned int": "u32",
+    "long": "long", "unsigned long": "ulong",
     "long long": "i64", "unsigned long long": "u64", "float": "f32", "double": "f64", "void": "void",
+}
+# enums declared as `typedef enum { ... } name;`: the code map records neither enums nor typedefs, so their canonical
+# type is just this name. int-sized on every target here (no -fshort-enums); the layout probe checks the struct fields.
+ENUM_TYPEDEFS = {
+    "ELzmaFinishMode",                                                     # 7-Zip LzmaDec.h
+    "FL2_strategy", "FL2_cParameter",                                      # fast-lzma2.h
+    "LZ4F_blockSizeID_t", "LZ4F_blockMode_t", "LZ4F_contentChecksum_t",   # lz4frame.h
+    "LZ4F_frameType_t", "LZ4F_blockChecksum_t",
 }
 # spelled return types (func.ret_type has no canonical form); typedefs resolved by hand, checked against both maps
 RET_TYPEDEFS = {
@@ -120,9 +133,9 @@ def main():
             return "size"
         if c in INTS:
             return INTS[c]
-        if size64 in (1, 2, 4, 8):  # typedef'd enum names etc.; the width is known from the map
-            return {1: "u8", 2: "u16", 4: "i32", 8: "i64"}[size64]
-        die("unknown type %r at %s" % (canon, where))
+        if c in ENUM_TYPEDEFS and size64 == size32 == 4:
+            return "i32"
+        die("unknown type %r at %s (add it to INTS or ENUM_TYPEDEFS)" % (canon, where))
 
     exports, wanted = {}, set()
     for name in sorted(s64):
@@ -144,13 +157,25 @@ def main():
                     wanted.add(base)
         exports[name] = (r, args)
 
+    def c_name(name):
+        """How C spells the type: its typedef where there is one, else `struct name` / `union name`."""
+        keys = [k for (k,) in db.execute("select r.key from record r join file f on f.id = r.file_id where r.config_id = ? "
+                                         "and r.name = ? and f.path like '%.h'", (c64, name))]
+        if any("@T@" in k for k in keys):
+            return name
+        for marker, kw in (("@S@", "struct "), ("@U@", "union ")):
+            if any(marker in k for k in keys):
+                return kw + name
+        die("no C spelling for %s (keys %s)" % (name, keys))
+
     # structs: everything reachable from the exports' pointee types through fields, header-defined only
-    structs, layouts, todo = {}, {}, sorted(wanted)
+    structs, cnames, layouts, todo = {}, {}, {}, sorted(wanted)
     while todo:
         name = todo.pop()
         if name in structs:
             continue
         key, layout, path = record_by_name(name)
+        cnames[name] = c_name(name)
         fields = []
         rows = db.execute("select name, type, canonical, offset_bits, size from field where config_id = ? and record_key = ? order by idx",
                           (c64, key)).fetchall()
@@ -161,6 +186,7 @@ def main():
                 sub = "%s__%s" % (name, fname)
                 kind, members = ANONYMOUS[(name, fname)]
                 structs[sub] = (kind, members, path)
+                cnames[sub] = [cnames[name], fname]  # no name of its own: reached as that member of its parent
                 fields.append((fname, "%s:%s" % (kind, sub), []))
                 continue
             m = re.match(r"^(.*?)((?:\[\d+\])+)$", canon.replace("const ", "").strip())
@@ -180,22 +206,29 @@ def main():
             k = db.execute("select key from record where config_id = ? and name = ? order by length(key) limit 1", (cid, name)).fetchone()
             if k:
                 size, align = db.execute("select size, align from record where config_id = ? and key = ?", (cid, k[0])).fetchone()
-                offsets = [o // 8 for (o,) in db.execute("select offset_bits from field where config_id = ? and record_key = ? order by idx", (cid, k[0]))]
-                layouts.setdefault(name, {})[tag] = (size, align, offsets)
+                rows = db.execute("select offset_bits, size from field where config_id = ? and record_key = ? order by idx", (cid, k[0])).fetchall()
+                layouts.setdefault(name, {})[tag] = (size, align, [o // 8 for o, _ in rows], [w for _, w in rows])
+    merge_probed(layouts, structs)
 
     with OUT.open("w", encoding="utf-8", newline="\n") as f:
-        f.write('"""GENERATED by tests/native/gen_bindings.py from the code map. Do not edit."""\n\n')
+        f.write('"""GENERATED by tests/native/gen_bindings.py from the code map and layouts/. Do not edit."""\n\n')
         f.write("# name -> (return type, [parameter types])\nEXPORTS = {\n")
         for name in sorted(exports):
             f.write("    %r: %r,\n" % (name, exports[name]))
         f.write("}\n\n# name -> (kind, [(field, type, [array dims])], defining header)\nSTRUCTS = {\n")
         for name in sorted(structs):
             f.write("    %r: %r,\n" % (name, structs[name]))
-        f.write("}\n\n# clang layouts from the code map: name -> {target: (size, alignment, [field offsets])}. An alignment above\n"
-                "# what malloc/ctypes guarantee (e.g. CBlake2sp's MY_ALIGN(64)) must be honoured by the caller: Library.alloc().\n"
+        f.write("}\n\n# name -> how C spells the type, or [parent's spelling, member] for an anonymous member's type\nC_NAMES = {\n")
+        for name in sorted(cnames):
+            f.write("    %r: %r,\n" % (name, cnames[name]))
+        f.write("}\n\n# layouts: name -> {target: (size, alignment, [field offsets], [field widths])}, from GrindCore.build's compiler\n"
+                "# and flags for each RID (layouts/<rid>.json; a legacy RID shares its target with the other build and must\n"
+                "# agree with it) and from clang in the code map (win-x64, win-x86), which must agree too. Alignment 0: not\n"
+                "# measured (an anonymous member's type can't be named). An alignment above what malloc/ctypes guarantee (e.g.\n"
+                "# CBlake2sp's MY_ALIGN(64)) must be honoured by the caller: Library.alloc().\n"
                 "LAYOUTS = {\n")
         for name in sorted(layouts):
-            f.write("    %r: %r,\n" % (name, layouts[name]))
+            f.write("    %r: %r,\n" % (name, dict(sorted(layouts[name].items()))))
         f.write("}\n\n# every symbol that is listed anywhere -> where: entrypoints (exported everywhere), dllexport (also exported\n"
                 "# on Windows), pinvoke (GrindCore.net calls it), undefined (no definition in the library at all)\nSYMBOLS = {\n")
         for name in sorted(symbols):
@@ -203,6 +236,32 @@ def main():
         f.write("}\n")
     gaps = {n: t for n, t in symbols.items() if "entrypoints" not in t}
     print("wrote %s: %d exports, %d structs, %d symbols (%d not in entrypoints.c)" % (OUT, len(exports), len(structs), len(symbols), len(gaps)))
+
+
+def merge_probed(layouts, structs):
+    """Add layouts/<rid>.json (probe_layouts.py) to `layouts`, keyed by the target gcnative.target() reports there.
+    Every file must cover exactly the spec's structs; files sharing a target, and the code map where it has the
+    target, must agree on every number."""
+    per_target = {}
+    for path in sorted(LAYOUT_DIR.glob("*.json")):
+        data = json.loads(path.read_text(encoding="utf-8"))
+        rid, got = data["rid"], data["structs"]
+        if set(got) != set(structs):
+            die("%s doesn't cover the spec's structs (missing %s, extra %s): rerun probe_layouts.py for %s"
+                % (path.name, sorted(set(structs) - set(got)), sorted(set(got) - set(structs)), rid))
+        target = data["target"]
+        for name, s in got.items():
+            if len(s["fields"]) != len(structs[name][1]):
+                die("%s: %s has %d fields, the spec %d" % (path.name, name, len(s["fields"]), len(structs[name][1])))
+            value = (s["size"], s["align"], [f[0] for f in s["fields"]], [f[1] for f in s["fields"]])
+            seen = per_target.setdefault(target, {}).setdefault(name, (rid, value))
+            if seen[1] != value:
+                die("%s lays out %s as %s, %s as %s" % (seen[0], name, seen[1], rid, value))
+            mapped = layouts.get(name, {}).get(target)
+            if mapped is not None and mapped != value:
+                die("%s: %s per GrindCore.build's compiler is %s, per clang in the code map %s" % (rid, name, value, mapped))
+            layouts.setdefault(name, {})[target] = value
+    print("layouts/: %s" % (", ".join("%s (%d structs)" % (t, len(v)) for t, v in sorted(per_target.items())) or "none"))
 
 
 def _prod(dims):

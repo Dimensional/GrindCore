@@ -17,7 +17,7 @@ from . import _spec
 _SCALARS = {
     "void": None, "i8": ctypes.c_int8, "u8": ctypes.c_uint8, "i16": ctypes.c_int16, "u16": ctypes.c_uint16,
     "i32": ctypes.c_int32, "u32": ctypes.c_uint32, "i64": ctypes.c_int64, "u64": ctypes.c_uint64,
-    "f32": ctypes.c_float, "f64": ctypes.c_double, "size": ctypes.c_size_t, "ssize": ctypes.c_ssize_t,
+    "long": ctypes.c_long, "ulong": ctypes.c_ulong, "f32": ctypes.c_float, "f64": ctypes.c_double, "size": ctypes.c_size_t, "ssize": ctypes.c_ssize_t,
     "ptr": ctypes.c_void_p, "cstr": ctypes.c_char_p,
 }
 
@@ -167,21 +167,25 @@ class Library(object):
         return rows
 
     def layout_report(self):
-        """ctypes' layout of every spec struct vs clang's (from the code map) where the map has this target:
-        [(name, (size, offsets) here, (size, offsets) per clang or None)]."""
+        """ctypes' layout of every spec struct vs the compiler's for this target (_spec.LAYOUTS):
+        [(name, (size, offsets, widths) here, (size, offsets, widths) per the compiler, or None)]."""
         t = target()
         rows = []
         for name in self.struct.names():
             cls = getattr(self.struct, name)
-            got = (ctypes.sizeof(cls), [getattr(cls, f).offset for f, _, _ in _spec.STRUCTS[name][1]])
+            fields = [getattr(cls, f) for f, _, _ in _spec.STRUCTS[name][1]]
+            got = (ctypes.sizeof(cls), [f.offset for f in fields], [f.size for f in fields])
             want = _spec.LAYOUTS.get(name, {}).get(t)
-            rows.append((name, got, (want[0], want[2]) if want else None))
+            rows.append((name, got, (want[0], want[2], want[3]) if want else None))
         return rows
 
     def alignment(self, name):
-        """Alignment the C side requires (e.g. CBlake2sp: 64, MY_ALIGN), which ctypes objects don't get by themselves."""
+        """Alignment the C side requires (e.g. CBlake2sp: 64, MY_ALIGN), which ctypes objects don't get by themselves:
+        this target's, or the largest any target has where this one isn't known."""
         cls = getattr(self.struct, name)
-        return max([v[1] for v in _spec.LAYOUTS.get(name, {}).values()] + [ctypes.alignment(cls)])
+        known = _spec.LAYOUTS.get(name, {})
+        aligns = [known[target()][1]] if target() in known else [v[1] for v in known.values()]
+        return max(aligns + [ctypes.alignment(cls)])
 
     def alloc(self, name):
         """A zeroed instance of a spec struct at an address with the alignment the C side requires."""

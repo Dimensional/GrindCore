@@ -139,7 +139,7 @@ class BZip2Tests(unittest.TestCase):
 
     def setUp(self):
         if bz2 is None:
-            self.skipTest("this Python has no bz2 module")
+            gctest.need(self, "python-bz2")
 
     def test_block_matches_python_byte_for_byte(self):
         for kind, gen in sample.KINDS:

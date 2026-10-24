@@ -69,8 +69,7 @@ class Fl2Tests(unittest.TestCase):
 
     def need_ref(self, which="ref"):
         if not getattr(self, which):
-            self.skipTest("no official fast-lzma2 %s: " % ("1.0.1" if which == "ref" else which) +
-                          ("; ".join(F.REF_ERROR) or "set GC_REF_FL2 (ref/build_fl2_ref.py)"))
+            gctest.need(self, "fl2", "no %s; %s" % ("1.0.1" if which == "ref" else which, "; ".join(F.REF_ERROR)))
 
     def stream(self, data, level=6, threads=1, dual=0, chunk=1 << 16, flush_every=False, api=None, params=()):
         s = (api or self.z).cstream(threads, dual)

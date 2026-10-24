@@ -58,7 +58,7 @@ def run_child(test, code, timeout=300):
 class Lzma2Stream(unittest.TestCase):
     def setUp(self):
         if U.lzma is None:
-            self.skipTest("this Python has no lzma module (the independent decoder)")
+            gctest.need(self, "python-lzma")
         self.L = gctest.LIB
 
     def test_stream_round_trip(self):

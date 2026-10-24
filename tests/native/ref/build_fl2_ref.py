@@ -12,9 +12,11 @@ decoder. Three builds come from two pinned GitHub archives (the project publishe
                own Makefile and Visual Studio project build it on x86-64. For the speed comparison; output is the same.
                The .S needs GNU as (binutils), which clang reaches with -fno-integrated-as.
 
-Sources are compiled with no extra defines (upstream's Makefile adds only -Wall -O2 -pthread -fPIC). Unix and macOS;
-stdlib only, Python 3.6+. The compiler defaults to the one GrindCore.build picks (eng/common/native/init-compiler.sh):
-$CC if set, else the highest-numbered clang-N on PATH, else clang, else cc.
+Sources are compiled with no extra defines (upstream's Makefile adds only -Wall -O2 -pthread -fPIC). Unix, macOS, and
+Windows with MSVC (msvc.py: --arch x64/x86/arm64, default this machine's), where FL2_DLL_EXPORT=1 makes fast-lzma2.h
+export its API, as upstream's Visual Studio project builds its DLL; stdlib only, Python 3.6+. The compiler defaults to
+the one GrindCore.build picks (eng/common/native/init-compiler.sh): $CC if set, else the highest-numbered clang-N on
+PATH, else clang, else cc.
 
   python3 build_fl2_ref.py [--out DIR] [--cc cc] [--cflags=...] [--tarballs DIR] [--asm]
   -> DIR/libfl2ref-1.0.1.so, DIR/libfl2ref-master.so (.dylib on macOS), and with --asm DIR/libfl2ref-1.0.1-asm.so.
@@ -36,6 +38,9 @@ import subprocess
 import sys
 import tarfile
 import urllib.request
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # embeddable Pythons leave it off
+import msvc  # noqa: E402
 
 REPO = "https://github.com/conor42/fast-lzma2/archive/"
 # name -> (archive name, commit, SHA-256 of GitHub's archive as fetched 2026-09-28)
@@ -85,8 +90,22 @@ def default_cc():
     return "clang" if shutil.which("clang") else "cc"
 
 
+def build_windows(a, sources, dll):
+    work = dll + ".work"
+    os.makedirs(work, exist_ok=True)
+    cl = 'cl /nologo /c /O2 /Ob2 /Ox /Oi /Gy /GL /fp:precise /MT /DNDEBUG /W3 /DFL2_DLL_EXPORT=1%s %s' % (
+        " " + a.cflags if a.cflags else "", " ".join('"%s"' % f for f in sources))
+    objs = " ".join(os.path.splitext(os.path.basename(f))[0] + ".obj" for f in sources)
+    msvc.run(msvc.arch_name(a.arch), [cl, 'link /nologo /DLL /LTCG /OUT:"%s" %s' % (dll, objs)], work)
+
+
 def build(a, src, label, asm=False):
     sources = sorted(glob.glob(os.path.join(src, "*.c")))
+    if sys.platform == "win32":
+        dll = os.path.join(a.out, "libfl2ref-%s.dll" % label)
+        build_windows(a, sources, dll)
+        print(dll)
+        return
     so = os.path.join(a.out, "libfl2ref-%s%s" % (label, ".dylib" if sys.platform == "darwin" else ".so"))
     # --cflags come after -O2, so they can override it. No -fvisibility=hidden: fast-lzma2.h marks its API default
     # visibility anyway, and the reference exists to export it.
@@ -113,7 +132,9 @@ def main():
     ap.add_argument("--cflags", default="", help='extra compiler flags, e.g. --cflags="-arch x86_64" or --cflags=-m32')
     ap.add_argument("--tarballs", help="a folder that may already hold the pinned archives")
     ap.add_argument("--asm", action="store_true", help="also build 1.0.1 with upstream's x86-64 assembler decoder")
+    ap.add_argument("--arch", choices=("x64", "x86", "arm64"), help="Windows: the target (default: this machine)")
     a = ap.parse_args()
+    a.out = os.path.abspath(a.out)  # MSVC compiles in a work folder under it
     os.makedirs(a.out, exist_ok=True)
     for name in ("1.0.1", "master"):
         build(a, unpack(a.out, a.tarballs, name), name)
@@ -122,7 +143,8 @@ def main():
             build(a, unpack(a.out, a.tarballs, "1.0.1"), "1.0.1-asm", asm=True)
         else:
             print("--asm: upstream's assembler decoder is x86-64 only (and ELF here); skipped")
-    print(subprocess.check_output([a.cc, "--version"]).decode(errors="replace").splitlines()[0])
+    if sys.platform != "win32":
+        print(subprocess.check_output([a.cc, "--version"]).decode(errors="replace").splitlines()[0])
 
 
 if __name__ == "__main__":

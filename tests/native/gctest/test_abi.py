@@ -40,15 +40,25 @@ class Symbols(unittest.TestCase):
             print("  %-45s %-8s%s  (%s)" % (name, state, " (Windows dllexport)" if windows_only else "", why.split(";")[0]))
 
 
+# what gcnative.target() reports for the 11 RIDs GrindCore ships (a legacy RID reports the other build's name)
+SHIPPED_TARGETS = ("linux-arm", "linux-arm64", "linux-x64", "linux-x86", "osx-arm64", "osx-x64", "win-arm64", "win-x64",
+                   "win-x86")
+
+
 class Layouts(unittest.TestCase):
-    def test_struct_layouts_match_clang(self):
+    def test_struct_layouts_match_the_build(self):
+        """ctypes' layout of every spec struct (size, field offsets and widths) against what GrindCore.build's own
+        compiler and flags give for this RID (probe_layouts.py, merged into _spec.LAYOUTS by gen_bindings.py)."""
         rows = gctest.LIB.layout_report()
-        compared = [r for r in rows if r[2] is not None]
-        if not compared:
+        missing = [n for n, _, w in rows if w is None]
+        if missing:
             for name, got, _ in rows:
-                print("  %-40s size %5d offsets %s" % (name, got[0], got[1]))
-            self.skipTest("the code map has no clang layouts for %s (only win-x64/win-x86); sizes printed" % gcnative.target())
-        bad = ["%s: ctypes %s vs clang %s" % (n, g, w) for n, g, w in compared if (g[0], g[1]) != (w[0], w[1])]
+                print("  %-40s size %5d offsets %s widths %s" % (name, got[0], got[1], got[2]))
+            why = "no compiler layouts for %s (%d of %d structs; sizes printed)" % (gcnative.target(), len(missing), len(rows))
+            if gcnative.target() not in SHIPPED_TARGETS:
+                self.skipTest(why + ": not a RID GrindCore ships")
+            self.fail(why + ": run probe_layouts.py for this RID, then gen_bindings.py")
+        bad = ["%s: ctypes %s vs the compiler %s" % (n, g, w) for n, g, w in rows if g != w]
         self.assertEqual(bad, [])
 
     def test_over_aligned_structs_get_their_alignment(self):

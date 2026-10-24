@@ -259,15 +259,17 @@ def pal(L):
 # ------------------------------------------------------------------------------------------------ official Brotli
 
 
-def folder():
-    return os.environ.get("GC_REF_BROTLI")
+def folders():
+    """$GC_REF_BROTLI: a folder, or several separated by os.pathsep (gctest --refs gives the RID's, then tb/)."""
+    return [d for d in os.environ.get("GC_REF_BROTLI", "").split(os.pathsep) if d]
 
 
 def fixtures():
-    """{name: bytes} of Brotli's own test fixtures from $GC_REF_BROTLI/brotli-1.1.0-testdata, or None."""
-    d = folder()
-    d = d and os.path.join(d, "brotli-1.1.0-testdata")
-    if not d or not os.path.isdir(d):
+    """{name: bytes} of Brotli's own test fixtures from the first $GC_REF_BROTLI folder with a
+    brotli-1.1.0-testdata, or None."""
+    d = next((os.path.join(f, "brotli-1.1.0-testdata") for f in folders()
+              if os.path.isdir(os.path.join(f, "brotli-1.1.0-testdata"))), None)
+    if not d:
         return None
     out = {}
     for name in sorted(os.listdir(d)):
@@ -280,14 +282,12 @@ REF_ERROR = []
 
 
 def reference(version="1.1.0"):
-    """Official Brotli from $GC_REF_BROTLI, or None. A library that is there but won't load (built for a newer glibc,
-    say) is None too, with the reason in REF_ERROR."""
-    d = folder()
-    if not d:
-        return None
+    """Official Brotli from the first $GC_REF_BROTLI folder that has it, or None. A library that is there but won't
+    load (built for a newer glibc, say) is None too, with the reason in REF_ERROR."""
     ext = ".dylib" if sys.platform == "darwin" else ".dll" if sys.platform == "win32" else ".so"
-    path = os.path.join(d, "libbrotliref-%s%s" % (version, ext))
-    if not os.path.exists(path):
+    path = next((p for p in (os.path.join(d, "libbrotliref-%s%s" % (version, ext)) for d in folders())
+                 if os.path.exists(p)), None)
+    if not path:
         return None
     try:
         return Ref(path)
@@ -296,32 +296,38 @@ def reference(version="1.1.0"):
         return None
 
 
+# Every official function the tests call. ref/build_brotli_ref.py exports exactly these from its Windows DLL (MSVC needs
+# a .def); off Windows every global symbol is exported anyway.
+_vp, _sz, _i, _u32 = ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int, ctypes.c_uint32
+REF_FUNCTIONS = [
+    ("BrotliDecoderCreateInstance", _vp, [_vp, _vp, _vp]),
+    ("BrotliDecoderDecompress", _i, [_sz, _vp, _vp, _vp]),
+    ("BrotliDecoderDecompressStream", _i, [_vp, _vp, _vp, _vp, _vp, _vp]),
+    ("BrotliDecoderDestroyInstance", None, [_vp]),
+    ("BrotliDecoderIsFinished", _i, [_vp]),
+    ("BrotliEncoderCompress", _i, [_i, _i, _i, _sz, _vp, _vp, _vp]),
+    ("BrotliEncoderCompressStream", _i, [_vp, _i, _vp, _vp, _vp, _vp, _vp]),
+    ("BrotliEncoderCreateInstance", _vp, [_vp, _vp, _vp]),
+    ("BrotliEncoderDestroyInstance", None, [_vp]),
+    ("BrotliEncoderHasMoreOutput", _i, [_vp]),
+    ("BrotliEncoderMaxCompressedSize", _sz, [_sz]),
+    ("BrotliEncoderSetParameter", _i, [_vp, _i, _u32]),
+    ("BrotliDecoderSetParameter", _i, [_vp, _i, _u32]),
+    ("BrotliDecoderGetErrorCode", _i, [_vp]),
+    ("BrotliDecoderErrorString", ctypes.c_char_p, [_i]),
+    ("BrotliEncoderIsFinished", _i, [_vp]),
+    ("BrotliDecoderVersion", _u32, []),
+    ("BrotliEncoderVersion", _u32, []),
+]
+
+
 class Ref(Api):
     """Official Brotli by its own names, plus the decoder functions GrindCore doesn't export."""
 
     def __init__(self, path):
         d = self.dll = ctypes.CDLL(path)
         self.path = path
-        vp, sz, i, u32 = ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int, ctypes.c_uint32
-        for name, res, args in (
-                ("BrotliDecoderCreateInstance", vp, [vp, vp, vp]),
-                ("BrotliDecoderDecompress", i, [sz, vp, vp, vp]),
-                ("BrotliDecoderDecompressStream", i, [vp, vp, vp, vp, vp, vp]),
-                ("BrotliDecoderDestroyInstance", None, [vp]),
-                ("BrotliDecoderIsFinished", i, [vp]),
-                ("BrotliEncoderCompress", i, [i, i, i, sz, vp, vp, vp]),
-                ("BrotliEncoderCompressStream", i, [vp, i, vp, vp, vp, vp, vp]),
-                ("BrotliEncoderCreateInstance", vp, [vp, vp, vp]),
-                ("BrotliEncoderDestroyInstance", None, [vp]),
-                ("BrotliEncoderHasMoreOutput", i, [vp]),
-                ("BrotliEncoderMaxCompressedSize", sz, [sz]),
-                ("BrotliEncoderSetParameter", i, [vp, i, u32]),
-                ("BrotliDecoderSetParameter", i, [vp, i, u32]),
-                ("BrotliDecoderGetErrorCode", i, [vp]),
-                ("BrotliDecoderErrorString", ctypes.c_char_p, [i]),
-                ("BrotliEncoderIsFinished", i, [vp]),
-                ("BrotliDecoderVersion", u32, []),
-                ("BrotliEncoderVersion", u32, [])):
+        for name, res, args in REF_FUNCTIONS:
             fn = getattr(d, name)
             fn.restype, fn.argtypes = res, args
         Api.__init__(self, lambda name: getattr(d, name), "official")

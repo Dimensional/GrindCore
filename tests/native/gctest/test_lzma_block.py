@@ -44,7 +44,7 @@ def lines(out):
 class LzmaBlock(unittest.TestCase):
     def setUp(self):
         if U.lzma is None:
-            self.skipTest("this Python has no lzma module (the independent decoder)")
+            gctest.need(self, "python-lzma")
         self.L = gctest.LIB
 
     def test_block_round_trip(self):
