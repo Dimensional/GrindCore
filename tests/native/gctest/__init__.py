@@ -126,7 +126,8 @@ KNOWN_DEFECTS = {
     "fl2-estimate-level-unchecked": "fast-lzma2 1.0.1's FL2_estimateCStreamSize indexes the level table without a "
                                     "check and adds what it reads to FL2_estimateCCtxSize's error code: levels "
                                     "below 0 or above 11 read past the table and return garbage, and level 0 leaves "
-                                    "the dictionary out; unused by GrindCore.net; audit/other-codecs.md 4.4.1",
+                                    "the dictionary out; unused by GrindCore.net; unfixed upstream, fixed in "
+                                    "fl2_compress.c on audit/native-fixes; audit/other-codecs.md 4.4.1 finding 8",
     "fl2-timeout-wait-race": "fast-lzma2 1.0.1's FL2POOL_waitAll with a timeout (fl2_pool.c:181-190) reports 'done' "
                              "when the job is queued but not yet started, so under load FL2_waitDStream and "
                              "FL2_waitCStream return early: wrong decoded output or FL2_error_stage_wrong, and "

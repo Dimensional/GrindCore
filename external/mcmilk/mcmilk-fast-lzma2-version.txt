@@ -17,3 +17,5 @@ GrindCore (audit/native-fixes, audit/other-codecs.md 4.4.1):
 - lzma2_dec.c: a chunk's last bytes are decoded from a zero-padded copy, and the fast loop keeps
   LZMA_REQUIRED_INPUT_MAX bytes in hand in both finish modes, so a corrupt chunk is no longer read up to 19 bytes
   past its end (marked [audit fix, audit/other-codecs.md 4.4.1 finding 10]; unfixed upstream).
+- fl2_compress.c: FL2_estimateCStreamSize checks the level as FL2_estimateCCtxSize does (marked [audit fix,
+  audit/other-codecs.md 4.4.1 finding 8]; unfixed upstream).

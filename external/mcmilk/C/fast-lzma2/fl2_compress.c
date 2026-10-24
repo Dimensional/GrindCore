@@ -1293,8 +1293,13 @@ FL2LIB_API size_t FL2LIB_CALL FL2_estimateCCtxSize_usingCCtx(const FL2_CCtx * cc
 
 FL2LIB_API size_t FL2LIB_CALL FL2_estimateCStreamSize(int compressionLevel, unsigned nbThreads, int dualBuffer)
 {
-    return FL2_estimateCCtxSize(compressionLevel, nbThreads)
-        + (FL2_defaultCParameters[compressionLevel].dictionarySize << (dualBuffer != 0));
+    /* [audit fix, audit/other-codecs.md 4.4.1 finding 8] the level is checked as FL2_estimateCCtxSize checks it.
+     * A level out of range read past FL2_defaultCParameters and added what it found to FL2_estimateCCtxSize's
+     * error code, and level 0 (the default) took table entry 0's dictionary. */
+    if (compressionLevel == 0)
+        compressionLevel = FL2_CLEVEL_DEFAULT;
+    CLAMPCHECK(compressionLevel, 1, FL2_MAX_CLEVEL);
+    return FL2_estimateCStreamSize_byParams(FL2_defaultCParameters + compressionLevel, nbThreads, dualBuffer);
 }
 
 FL2LIB_API size_t FL2LIB_CALL FL2_estimateCStreamSize_byParams(const FL2_compressionParameters * params, unsigned nbThreads, int dualBuffer)
