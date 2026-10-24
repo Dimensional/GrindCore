@@ -393,6 +393,10 @@ FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_Lzma2_v25_01_Enc_EncodeMult
     return Lzma2Enc_EncodeMultiCallPrepare(p);
 }
 
+// init: bit 0 re-sets the stream (GrindCore.net passes 0); bit 1 [audit fix, audit/lzma.md 3.1] marks the calls that
+// drain the input for a sync flush (Lzma2Stream.Flush(), not Complete()), so the stream can go on afterwards with
+// its dictionary. Without bit 1 a write after the drain still resumes, but at levels 5-9 (the binary-tree finder) its
+// matches can come from a tree left out of order, which can make the output wrong.
 FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_Lzma2_v25_01_Enc_EncodeMultiCall(CLzma2EncHandle p, uint8_t *outBuf, size_t *outBufSize, CBufferInStream *srcStream, uint32_t init)
 {
     if (!p || !outBufSize || SZ_LZ_NULL_BUF(outBuf, *outBufSize) || SZ_LZ_BAD_INSTREAM(srcStream))

@@ -34,6 +34,10 @@ KNOWN_DEFECTS = {
     "zlibng-arm32-neon-align": "zlib-ng's NEON Adler-32 uses :256-aligned loads (clang <= 16 on 32-bit ARM) on data "
                                "aligned to 16: SIGBUS on every call; fixed by the zlib-ng_arm32_neon_ld4.h header on "
                                "audit/native-fixes; audit/platforms.md 10.7",
+    "lzma2-flush-data-loss": "the multi-call LZMA2 encoder (Lzma2Stream's solid mode) latches the end of its input when "
+                             "a Flush() drains it (LzFind.c:172-175), and the hook never clears it, so everything "
+                             "written after the first flush is lost; fixed on audit/native-fixes with a liblzma-style "
+                             "sync flush; audit/lzma.md 3.1",
     "lzma2-prepare-leak": "Lzma2Enc_EncodeMultiCallPrepare after a multithreaded Encode2 leaks the workers' encoders, "
                           "the output buffers and the MtCoder threads; fixed in Lzma2Enc.c on audit/native-fixes; "
                           "audit/lzma.md 3.3",

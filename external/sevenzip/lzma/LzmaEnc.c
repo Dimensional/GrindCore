@@ -22,6 +22,7 @@ Igor Pavlov : Public domain */
 
 /* the following LzmaEnc_* declarations is internal LZMA interface for LZMA2 encoder */
 SRes LzmaEnc_SetStreamLzma2(CLzmaEncHandle p, ISeqInStreamPtr inStream); // Nanook
+void LzmaEnc_ResumeMultiCallLzma2(CLzmaEncHandle p, BoolInt syncFlush); // [audit fix, audit/lzma.md 3.1]
 
 SRes LzmaEnc_PrepareForLzma2(CLzmaEncHandle p, ISeqInStreamPtr inStream, UInt32 keepWindowSize,
     ISzAllocPtr alloc, ISzAllocPtr allocBig);
@@ -3176,6 +3177,29 @@ SRes LzmaEnc_SetStreamLzma2(CLzmaEncHandle p,
 // GET_CLzmaEnc_p
 MatchFinder_SET_STREAM(&MFB, inStream)
 return SZ_OK;
+}
+
+// [audit fix, audit/lzma.md 3.1] Called by Lzma2Enc_EncodeMultiCall before each chunk. Draining the input at a flush
+// left the match finder latched at the end of the stream (a 0-byte read), so input written after a Flush() was
+// never read and was lost. This resumes it once new input is there, and gives back to the tree the positions held
+// back during a sync flush. syncFlush (the caller's Flush(), not its Complete()) holds back, while this call
+// encodes, the positions the binary tree can't insert with the full length limit, as liblzma's LZMA_SYNC_FLUSH does.
+// Not for the multithreaded match finder, which this single-threaded path never selects.
+void LzmaEnc_ResumeMultiCallLzma2(CLzmaEncHandle p, BoolInt syncFlush)
+{
+  // GET_CLzmaEnc_p
+  #ifndef Z7_ST
+  if (p->mtMode)
+    return;
+  #endif
+  MFB.syncFlush = (Byte)(syncFlush ? 1 : 0);
+  if (p->needInit) // the match finder isn't initialised before the first chunk (LzmaEnc_Create doesn't zero it)
+    return;
+  {
+    const UInt32 pending = MatchFinder_ResumeAfterEnd(&MFB);
+    if (pending != 0)
+      p->matchFinder.Skip(p->matchFinderObj, pending);
+  }
 }
 
 SRes LzmaEnc_LzmaCodeMultiCallPrepare(CLzmaEncHandle p, UInt32 *blockSize, UInt32 *dictSize, ISzAllocPtr alloc, ISzAllocPtr allocBig)

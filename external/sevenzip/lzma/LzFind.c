@@ -243,6 +243,8 @@ void MatchFinder_Construct(CMatchFinder *p)
   p->stream = NULL;
   p->hash = NULL;
   p->expectedDataSize = (UInt64)(Int64)-1;
+  p->pending = 0;   // [audit fix, audit/lzma.md 3.1] GrindCore
+  p->syncFlush = 0;
   MatchFinder_SetDefaultSettings(p);
 
   for (i = 0; i < 256; i++)
@@ -570,6 +572,7 @@ void MatchFinder_Init_4(CMatchFinder *p)
   }
   p->result = SZ_OK;
   p->streamEndWasReached = 0;
+  p->pending = 0;   // [audit fix, audit/lzma.md 3.1] GrindCore
 }
 
 
@@ -592,6 +595,44 @@ void MatchFinder_Init(void *_p)
   // p->cyclicBufferPos = 0; // smallest value
   // p->son[0] = p->son[1] = 0; // unused: we can init skipped record for speculated accesses.
   MatchFinder_SetLimits(p);
+}
+
+
+/* [audit fix, audit/lzma.md 3.1] GrindCore: go on reading after the end of the input was reached, for the multi-call
+   LZMA2 encoder's sync flush (Nanook's hook). Upstream reads only from MatchFinder_CheckLimits(), when exactly
+   keepSizeAfter bytes are left, and a 0-byte read latches streamEndWasReached for good. After a flush fewer bytes are
+   left, so this clears the latch and reads itself, as CheckLimits() would.
+   If new input came, the positions held back during the flush (pending, see BT_GET_MATCHES_HEADER) are rewound, and
+   the caller must Skip() exactly that many, so that the binary tree gets them with the full length limit, as liblzma
+   does after LZMA_SYNC_FLUSH. Without new input nothing changes, and 0 is returned. */
+UInt32 MatchFinder_ResumeAfterEnd(CMatchFinder *p)
+{
+  UInt32 pending;
+  if (!p->streamEndWasReached || p->result != SZ_OK || p->directInput)
+    return 0;
+  p->streamEndWasReached = 0;
+  {
+    const UInt32 streamPos = p->streamPos;
+    if (MatchFinder_NeedMove(p))
+      MatchFinder_MoveBlock(p);
+    MatchFinder_ReadBlock(p);
+    if (p->streamPos == streamPos)
+      return 0; // no new input: ReadBlock() latched the end again
+  }
+  pending = p->pending;
+  p->pending = 0;
+  if (pending != 0)
+  {
+    // The held-back positions were passed by MatchFinder_MovePos() only, so their bytes are still in the buffer
+    // (pending < matchMaxLen <= keepSizeBefore, which MoveBlock() keeps) and nothing in the hash or the tree points
+    // at them.
+    p->buffer -= pending;
+    p->pos -= pending;
+    p->cyclicBufferPos = (p->cyclicBufferPos >= pending ? p->cyclicBufferPos : p->cyclicBufferPos + p->cyclicBufferSize)
+        - pending;
+  }
+  MatchFinder_SetLimits(p);
+  return pending;
 }
 
 
@@ -1111,15 +1152,27 @@ static void MatchFinder_MovePos(CMatchFinder *p)
   MOVE_POS
 }
 
-#define GET_MATCHES_HEADER2(minLen, ret_op) \
+/* [audit fix, audit/lzma.md 3.1] GrindCore: holdLen. During a sync flush (p->syncFlush, set only by the multi-call
+   LZMA2 hook), a position with less than holdLen bytes ahead is held back instead of inserted, and counted in
+   p->pending, for MatchFinder_ResumeAfterEnd(). For the binary trees holdLen is matchMaxLen, as in liblzma's
+   lz_encoder_mf.c ("When flushing, we cannot run the match finder unless there is nice_len bytes available"): an
+   insertion with a shorter limit replaces an equal-so-far node and adopts its subtrees, which can then be out of
+   order past that limit, and a later search, which trusts the order for its first min(len0, len1) bytes, can report
+   a match that isn't one. For hash chains (which compare every candidate from its first byte) it's minLen, so only the
+   positions upstream skips anyway are hashed later. Outside a sync flush, syncFlush is 0 and nothing changes. */
+#define GET_MATCHES_HEADER3(minLen, holdLen, ret_op) \
   UInt32 hv; const Byte *cur; UInt32 curMatch; \
   UInt32 lenLimit = p->lenLimit; \
-  if (lenLimit < minLen) { MatchFinder_MovePos(p);  ret_op; } \
+  if (lenLimit < minLen || (p->syncFlush && lenLimit < (holdLen))) \
+    { p->pending += p->syncFlush; MatchFinder_MovePos(p);  ret_op; } \
   cur = p->buffer;
 
+#define GET_MATCHES_HEADER2(minLen, ret_op) GET_MATCHES_HEADER3(minLen, minLen, ret_op)
 #define GET_MATCHES_HEADER(minLen) GET_MATCHES_HEADER2(minLen, return distances)
+#define BT_GET_MATCHES_HEADER(minLen) GET_MATCHES_HEADER3(minLen, p->matchMaxLen, return distances)
+// SKIP_HEADER is the binary trees' (the hash chains have HC_SKIP_HEADER)
 #define SKIP_HEADER(minLen)  \
-  do { GET_MATCHES_HEADER2(minLen, continue)
+  do { GET_MATCHES_HEADER3(minLen, p->matchMaxLen, continue)
 
 #define MF_PARAMS(p)  lenLimit, curMatch, p->pos, p->buffer, p->son, \
     p->cyclicBufferPos, p->cyclicBufferSize, p->cutValue
@@ -1151,7 +1204,7 @@ static void MatchFinder_MovePos(CMatchFinder *p)
 static UInt32* Bt2_MatchFinder_GetMatches(void *_p, UInt32 *distances)
 {
   CMatchFinder *p = (CMatchFinder *)_p;
-  GET_MATCHES_HEADER(2)
+  BT_GET_MATCHES_HEADER(2) // [audit fix, audit/lzma.md 3.1] was GET_MATCHES_HEADER
   HASH2_CALC
   curMatch = p->hash[hv];
   p->hash[hv] = p->pos;
@@ -1160,7 +1213,7 @@ static UInt32* Bt2_MatchFinder_GetMatches(void *_p, UInt32 *distances)
 
 UInt32* Bt3Zip_MatchFinder_GetMatches(CMatchFinder *p, UInt32 *distances)
 {
-  GET_MATCHES_HEADER(3)
+  BT_GET_MATCHES_HEADER(3) // [audit fix, audit/lzma.md 3.1] was GET_MATCHES_HEADER
   HASH_ZIP_CALC
   curMatch = p->hash[hv];
   p->hash[hv] = p->pos;
@@ -1181,7 +1234,7 @@ static UInt32* Bt3_MatchFinder_GetMatches(void *_p, UInt32 *distances)
   UInt32 h2, d2, pos;
   unsigned maxLen;
   UInt32 *hash;
-  GET_MATCHES_HEADER(3)
+  BT_GET_MATCHES_HEADER(3) // [audit fix, audit/lzma.md 3.1] was GET_MATCHES_HEADER
 
   HASH3_CALC
 
@@ -1223,7 +1276,7 @@ static UInt32* Bt4_MatchFinder_GetMatches(void *_p, UInt32 *distances)
   UInt32 h2, h3, d2, d3, pos;
   unsigned maxLen;
   UInt32 *hash;
-  GET_MATCHES_HEADER(4)
+  BT_GET_MATCHES_HEADER(4) // [audit fix, audit/lzma.md 3.1] was GET_MATCHES_HEADER
 
   HASH4_CALC
 
@@ -1292,7 +1345,7 @@ static UInt32* Bt5_MatchFinder_GetMatches(void *_p, UInt32 *distances)
   UInt32 h2, h3, d2, d3, pos;
   unsigned maxLen;
   UInt32 *hash;
-  GET_MATCHES_HEADER(5)
+  BT_GET_MATCHES_HEADER(5) // [audit fix, audit/lzma.md 3.1] was GET_MATCHES_HEADER
 
   HASH5_CALC
 
@@ -1588,7 +1641,7 @@ static void Bt5_MatchFinder_Skip(void *_p, UInt32 num)
 
 
 #define HC_SKIP_HEADER(minLen) \
-    do { if (p->lenLimit < minLen) { MatchFinder_MovePos(p); num--; continue; } { \
+    do { if (p->lenLimit < minLen) { p->pending += p->syncFlush; MatchFinder_MovePos(p); num--; continue; } { \
     const Byte *cur; \
     UInt32 *hash; \
     UInt32 *son; \

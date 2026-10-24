@@ -149,6 +149,8 @@ def encode(L, payload, level=1, force=None):
     """One LZMA2 stream, solid, the whole payload buffered then drained, 0x00 end marker appended as Lzma2Stream does
     (Lzma2Stream.cs:228). force = a multicallMode value written into the inner encoder right after Prepare.
     Returns dict(rc, prop, stream, inner)."""
+    if len(payload) >= RING:  # it's copied into one ring; flushed_encode() takes any size
+        raise ValueError("encode(): %d bytes don't fit the %d-byte ring" % (len(payload), RING))
     enc = L.SZ_Lzma2_v25_01_Enc_Create()
     try:
         props = props_for(L, level)
@@ -174,6 +176,72 @@ def encode(L, payload, level=1, force=None):
             if rc or n.value == 0:
                 break
         return {"rc": rc, "prop": prop, "stream": bytes(out) + b"\x00", "inner": inner}
+    finally:
+        L.SZ_Lzma2_v25_01_Enc_Destroy(enc)
+
+
+SYNC_FLUSH = 2  # EncodeMultiCall's init bit 1: the calls that drain the input for a Flush() (audit/lzma.md 3.1)
+
+
+def flushed_encode(L, pieces, level=5, sync=SYNC_FLUSH, ring=RING):
+    """One solid LZMA2 stream, driven as Lzma2Encoder.encodeDataSolid does: pieces = [(bytes, flush after it)]. A full
+    ring gets one call (a chunk); a Flush() drains the ring with init = sync until a call writes nothing; the end drains
+    it with 0 and appends the 0x00 Lzma2Stream writes. sync=0 is the resume without held-back positions.
+    Returns dict(rc, prop, stream, marks, stuck): marks = [(bytes written, stream length)] after each flush; stuck when
+    a full ring got no call to take anything (a library without the fix, latched after a flush)."""
+    enc = L.SZ_Lzma2_v25_01_Enc_Create()
+    try:
+        props = props_for(L, level)
+        rc = L.SZ_Lzma2_v25_01_Enc_SetProps(enc, ctypes.byref(props))
+        prop = L.SZ_Lzma2_v25_01_Enc_WriteProperties(enc) if rc == 0 else None
+        rc = rc or L.SZ_Lzma2_v25_01_Enc_EncodeMultiCallPrepare(enc)
+        if rc:
+            return {"rc": rc, "prop": prop, "stream": b"", "marks": []}
+        buf = ctypes.create_string_buffer(ring)
+        s = L.struct.CBufferInStream()
+        s.buffer, s.size, s.pos, s.remaining = ctypes.addressof(buf), ring, 0, 0
+        out, ob = bytearray(), ctypes.create_string_buffer(OUT_CHUNK)
+        state = {"rc": 0, "stuck": False}
+
+        def call(flags):
+            n = ctypes.c_size_t(OUT_CHUNK)
+            r = L.SZ_Lzma2_v25_01_Enc_EncodeMultiCall(enc, ob, ctypes.byref(n), ctypes.byref(s), flags)
+            out.extend(ob.raw[:n.value])
+            state["rc"] = state["rc"] or r
+            return n.value if r == 0 else 0
+
+        def drain(flags):
+            for _ in range(1000000):
+                if call(flags) == 0:
+                    return
+
+        marks, written = [], 0
+        for data, flush in pieces:
+            off = 0
+            while off < len(data):
+                if s.remaining == s.size:  # Lzma2Encoder calls the encoder only on a full ring between flushes
+                    before = s.remaining
+                    call(0)
+                    if state["rc"] or s.remaining == before:
+                        state["stuck"] = not state["rc"]
+                        break
+                    continue
+                if s.pos == s.size:
+                    s.pos = 0
+                w = (s.pos + s.remaining) % s.size
+                n = min(s.size - s.remaining, len(data) - off, s.size - w)
+                ctypes.memmove(ctypes.addressof(buf) + w, data[off:off + n], n)
+                s.remaining += n
+                off += n
+            written += len(data)
+            if flush:
+                drain(sync)
+                marks.append((written, len(out)))
+            if state["rc"] or state["stuck"]:
+                break
+        drain(0)
+        return {"rc": state["rc"], "prop": prop, "stream": bytes(out) + b"\x00", "marks": marks,
+                "stuck": state["stuck"]}
     finally:
         L.SZ_Lzma2_v25_01_Enc_Destroy(enc)
 

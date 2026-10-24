@@ -51,6 +51,13 @@ typedef struct
   size_t numRefs;
 
   UInt64 expectedDataSize;
+
+  // [audit fix, audit/lzma.md 3.1] GrindCore's multi-call LZMA2 sync flush (Nanook's hook), as liblzma's
+  // LZMA_SYNC_FLUSH: while syncFlush is set, the binary-tree finders hold back each position they can't insert with
+  // the full length limit (pending), and MatchFinder_ResumeAfterEnd() hands them back for Skip() once more input is
+  // there. Both stay 0 outside that hook, so nothing else changes.
+  UInt32 pending;
+  Byte syncFlush;
 } CMatchFinder;
 
 #define Inline_MatchFinder_GetPointerToCurrentPos(p) ((const Byte *)(p)->buffer)
@@ -68,6 +75,7 @@ int MatchFinder_NeedMove(CMatchFinder *p);
 /* Byte *MatchFinder_GetPointerToCurrentPos(CMatchFinder *p); */
 void MatchFinder_MoveBlock(CMatchFinder *p);
 void MatchFinder_ReadIfRequired(CMatchFinder *p);
+UInt32 MatchFinder_ResumeAfterEnd(CMatchFinder *p); // [audit fix, audit/lzma.md 3.1] GrindCore
 
 void MatchFinder_Construct(CMatchFinder *p);
 

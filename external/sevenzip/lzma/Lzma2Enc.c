@@ -112,6 +112,7 @@ static void Lzma2EncInt_InitBlock(CLzma2EncInt *p)
 
 
 SRes LzmaEnc_SetStreamLzma2(CLzmaEncHandle p, ISeqInStreamPtr inStream); // Nanook
+void LzmaEnc_ResumeMultiCallLzma2(CLzmaEncHandle p, BoolInt syncFlush); // [audit fix, audit/lzma.md 3.1]
 SRes LzmaEnc_PrepareForLzma2(CLzmaEncHandle p, ISeqInStreamPtr inStream, UInt32 keepWindowSize,
     ISzAllocPtr alloc, ISzAllocPtr allocBig);
 SRes LzmaEnc_MemPrepare(CLzmaEncHandle p, const Byte *src, SizeT srcLen,
@@ -885,16 +886,21 @@ SRes Lzma2Enc_EncodeMultiCallPrepare(CLzma2EncHandle p)
   return res;
 }
 
+// [audit fix, audit/lzma.md 3.1] init is a set of flags: bit 0 as before (re-set the stream), bit 1 the caller's sync
+// flush (Flush(), not Complete()), see LzmaEnc_ResumeMultiCallLzma2.
 SRes Lzma2Enc_EncodeMultiCall(CLzma2EncHandle p, Byte *outBuf, size_t *outBufSize, ISeqInStreamPtr inStream, BoolInt init)
 {
   // set the instream - nothing else - uses multicall
   p->inStream.realStream = inStream;
 
   // Re-prepare the stream if this is a new init call
-  if (init)
+  if (init & 1) // [audit fix, audit/lzma.md 3.1] was (init); GrindCore.net passes 0
   {
     RINOK(LzmaEnc_SetStreamLzma2(p->coders[0].enc, &p->inStream.vt))
   }
+
+  // [audit fix, audit/lzma.md 3.1] go on after a flush, which left the match finder at the end of its input
+  LzmaEnc_ResumeMultiCallLzma2(p->coders[0].enc, (init & 2) != 0);
 
   // Encode the subblock - final parameter indicates end of block, not end of stream
   SRes res = Lzma2EncInt_EncodeSubblock(&p->coders[0], outBuf, outBufSize, NULL);
