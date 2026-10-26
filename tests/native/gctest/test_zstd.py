@@ -122,6 +122,30 @@ class _ZStdTests(object):
         r = self.z.decompress_block(stream, len(data) - 1)[0]
         self.assertTrue(self.z.is_error(r), "decoding into one byte too few must be an error, got %d" % r)
 
+    def test_error_codes(self):
+        """GetErrorCode, exported on audit/native-fixes (absent from the shipped binaries, where this skips): zstd's
+        ZSTD_ErrorCode for a result, so a caller can tell a too-small buffer from corrupt data (zstd.md, ZStdBlock's
+        mapResult). 0 for anything that isn't an error and n for (size_t)-n, on both sides of IsError's threshold for
+        this RID's size_t (maxCode 120 in both versions); then real failures, with official zstd's names for them."""
+        if not self.L.has(self.z.P + "GetErrorCode"):
+            self.skipTest("%sGetErrorCode not exported by this library (exported on audit/native-fixes)" % self.z.P)
+        error_code = self.z.fn("GetErrorCode")
+        top = 1 << (8 * ctypes.sizeof(ctypes.c_size_t))
+        for v in (0, 1, 70, top // 2, top - 121, top - 120, top - 119, top - 70, top - 1):
+            with self.subTest(value=hex(v)):
+                self.assertEqual(self.z.is_error(v), v > top - 120)
+                self.assertEqual(error_code(v), top - v if self.z.is_error(v) else 0)
+        stream = self.z.compress_block(sample.text(20000), 3)[1]
+        real = [("one byte too few", self.z.decompress_block(stream, 19999)[0], 70),           # dstSize_tooSmall
+                ("no frame magic", self.z.decompress_block(b"not a zstd frame", 100)[0], 10),  # prefix_unknown
+                ("the PAL's argument error", self.z.fn("CompressBlock")(None, None, 0, None, 0, 3), 1)]  # GENERIC
+        for what, r, code in real:
+            with self.subTest(what):
+                self.assertTrue(self.z.is_error(r))
+                self.assertEqual(error_code(r), code)
+                if self.ref:
+                    self.assertEqual(self.z.error_name(r), self.ref.error_name(r))
+
     def _contexts(self):
         """A compression and a decompression context, and a raw-content dictionary for each, freed by cleanups."""
         c, d = self.z.cctx(), self.z.dctx()

@@ -1,4 +1,4 @@
-"""Helpers for test_fl2.py: fast-lzma2 1.0.1's own API, which GrindCore exports unchanged (61 FL2_* functions, no PAL),
+"""Helpers for test_fl2.py: fast-lzma2 1.0.1's own API, which GrindCore exports unchanged (64 FL2_* functions, no PAL),
 and the same calls on official builds from ref/build_fl2_ref.py, so the two compare byte for byte. Both load through
 gcnative, which gives them the same prototypes.
 

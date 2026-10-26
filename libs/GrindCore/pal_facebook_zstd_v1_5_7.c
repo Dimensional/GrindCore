@@ -223,6 +223,10 @@ FUNCTIONEXPORT const char* FUNCTIONCALLINGCONVENCTION SZ_ZStd_v1_5_7_GetErrorNam
     return ZSTD_getErrorName(result);
 }
 
+FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_ZStd_v1_5_7_GetErrorCode(size_t result) {
+    return (int32_t)ZSTD_getErrorCode(result);
+}
+
 //
 // ===== Recommended Buffer Sizes =====
 //

@@ -11,7 +11,8 @@ import sys
 OK, ERROR, MEMERROR, COMPRESSFAIL, DECOMPRESSFAIL = 0, -1, -2, -3, -4
 STREAMHC_SIZE = 262200          # LZ4_STREAMHC_MINSIZE (lz4hc.h), the extState size LZ4 guarantees
 LZ4F_VERSION = 100
-LZ4F_ERROR_MAXCODE = 23         # lz4frame.h: ERROR_maxCode is the 24th item of the LZ4F error list, counting OK_NoError
+LZ4F_ERROR_MAXCODE = 24         # lz4frame.h: ERROR_maxCode is the 25th item of the LZ4F error list, counting OK_NoError
+#                                 (it was 23 here, which called ERROR_io_read, an lz4file.c error, a size)
 FRAME_MAGIC, SKIPPABLE_START = 0x184D2204, 0x184D2A50
 SIZE_T_BITS = 8 * ctypes.sizeof(ctypes.c_size_t)
 
@@ -21,7 +22,7 @@ LINKED, INDEPENDENT = 0, 1
 
 
 def lz4f_is_error(code):
-    """LZ4F_isError: codes are (size_t)-n for n in 1..maxCode-1."""
+    """LZ4F_isError: codes are (size_t)-n for n in 1..maxCode-1 (test_frame_error_helpers checks this against LZ4F's)."""
     return code > (1 << SIZE_T_BITS) - LZ4F_ERROR_MAXCODE
 
 

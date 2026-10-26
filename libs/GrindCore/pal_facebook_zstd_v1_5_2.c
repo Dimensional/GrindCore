@@ -1,6 +1,9 @@
 #define ZSTD_STATIC_LINKING_ONLY
 #define ZSTD_v1_5_2_STATIC_LINKING_ONLY
 #include "pal_facebook_zstd_v1_5_2.h"
+// ZSTD_v1_5_2_getErrorCode. Only here, not in the header: entrypoints.c also includes 1.5.7's zstd.h, which brings
+// 1.5.7's zstd_errors.h, and the two define ZSTDERRORLIB_API differently.
+#include "external/facebook/zstd_v1_5_2/zstd_errors.h"
 #include <stdlib.h>
 #include <stdint.h>
 
@@ -229,6 +232,10 @@ FUNCTIONEXPORT unsigned FUNCTIONCALLINGCONVENCTION SZ_ZStd_v1_5_2_IsError(size_t
 
 FUNCTIONEXPORT const char* FUNCTIONCALLINGCONVENCTION SZ_ZStd_v1_5_2_GetErrorName(size_t result) {
     return ZSTD_v1_5_2_getErrorName(result);
+}
+
+FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_ZStd_v1_5_2_GetErrorCode(size_t result) {
+    return (int32_t)ZSTD_v1_5_2_getErrorCode(result);
 }
 
 //

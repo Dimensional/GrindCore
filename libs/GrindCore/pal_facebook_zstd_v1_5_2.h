@@ -92,6 +92,8 @@ FUNCTIONEXPORT size_t FUNCTIONCALLINGCONVENCTION SZ_ZStd_v1_5_2_CStreamOutSize(v
 /* Error Handling */
 FUNCTIONEXPORT unsigned FUNCTIONCALLINGCONVENCTION SZ_ZStd_v1_5_2_IsError(size_t result);
 FUNCTIONEXPORT const char* FUNCTIONCALLINGCONVENCTION SZ_ZStd_v1_5_2_GetErrorName(size_t result);
+/* zstd's ZSTD_ErrorCode for a result: 0 if it isn't an error, else e.g. 20 corruption_detected, 70 dstSize_tooSmall */
+FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_ZStd_v1_5_2_GetErrorCode(size_t result);
 
 /* Skippable Frame Functions */
 FUNCTIONEXPORT size_t FUNCTIONCALLINGCONVENCTION SZ_ZStd_v1_5_2_WriteSkippableFrame(

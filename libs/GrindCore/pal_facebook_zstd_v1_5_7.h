@@ -89,6 +89,8 @@ FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_ZStd_v1_5_7_SetDecompressio
 /* Error Handling */
 FUNCTIONEXPORT unsigned FUNCTIONCALLINGCONVENCTION SZ_ZStd_v1_5_7_IsError(size_t result);
 FUNCTIONEXPORT const char* FUNCTIONCALLINGCONVENCTION SZ_ZStd_v1_5_7_GetErrorName(size_t result);
+/* zstd's ZSTD_ErrorCode for a result: 0 if it isn't an error, else e.g. 20 corruption_detected, 70 dstSize_tooSmall */
+FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_ZStd_v1_5_7_GetErrorCode(size_t result);
 
 /* Recommended Buffer Sizes */
 FUNCTIONEXPORT size_t FUNCTIONCALLINGCONVENCTION SZ_ZStd_v1_5_7_CStreamInSize(void);

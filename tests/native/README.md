@@ -1,6 +1,6 @@
 # Native test suite (ctypes, no .NET)
 
-Tests GrindCore's C library directly: all 329 exports, every codec, on all 11 RIDs. It was written for the 2026 audit.
+Tests GrindCore's C library directly: all 337 exports, every codec, on all 11 RIDs. It was written for the 2026 audit.
 The plan, the results and the findings are in the audit's notes, the `grindcore-workspace` repo (the
 `audit/<topic>.md` references in the code are to that repo). They aren't needed to run anything here.
 
@@ -64,8 +64,9 @@ Run it from this folder, or run `gctest/__main__.py` by its path from anywhere.
   - `alloc()` for structs that need more alignment than ctypes gives (`CBlake2sp`: 64).
 - `gcnative/_spec.py` is **generated**; don't edit it. `python gen_bindings.py [--db codemap.db]` writes it from the
   code map (the workspace's `tools/codemap`; by default its `out/codemap.db`, with GrindCore checked out as the
-  workspace's submodule) and from `layouts/` (below). `gcnative.OVERRIDES` carries prototypes that changed on the
-  audit branch. Running the suite needs only the committed `_spec.py`; regenerating it needs the code map.
+  workspace's submodule) and from `layouts/` (below). `gcnative.OVERRIDES` carries prototypes that changed or were
+  added on the audit branch after the code map was made (it predates `ec43222`, 2026-09-26). Running the suite needs
+  only the committed `_spec.py`; regenerating it needs the code map.
   - Symbols = `entrypoints.c` ∪ dllexport ∪ GrindCore.net's P/Invokes, each tagged with its source.
   - Types come from the win-x64 and win-x86 maps: whatever differs in width is `size_t`. C's `long` is a type of its
     own (`long`/`ulong`, ctypes' `c_long`): 4 bytes on Windows and 32-bit targets, 8 on 64-bit Linux and macOS

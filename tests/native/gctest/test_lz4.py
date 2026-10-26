@@ -675,3 +675,36 @@ class Lz4Tests(unittest.TestCase):
         finally:
             enc.close()
             dec.close()
+
+    def test_frame_error_helpers(self):
+        """IsError, GetErrorName and GetErrorCode, exported on audit/native-fixes (absent from the shipped binaries,
+        where this skips): LZ4F's own classifier, name and code for a size_t result, where GrindCore.net uses a signed
+        cast that can't see an error when size_t is 32-bit (abi-verification.md 4.6). On both sides of the threshold
+        for this RID's size_t, against lz4_util's copy of LZ4F_isError; then real failures by code and name, the PAL's
+        argument error among them (SIZE_MAX, ERROR_GENERIC)."""
+        for name in ("IsError", "GetErrorName", "GetErrorCode"):
+            if not self.L.has(PF + name):
+                self.skipTest("%s%s not exported by this library (exported on audit/native-fixes)" % (PF, name))
+        is_error, error_name, error_code = (self.fn(PF + n) for n in ("IsError", "GetErrorName", "GetErrorCode"))
+        top, m = 1 << Z.SIZE_T_BITS, Z.LZ4F_ERROR_MAXCODE
+        for v in (0, 1, 19, top // 2, top - m - 1, top - m, top - m + 1, top - 11, top - 1):
+            with self.subTest(value=hex(v)):
+                self.assertEqual(bool(is_error(v)), Z.lz4f_is_error(v))
+                self.assertEqual(error_code(v), Z.lz4f_error_code(v) if Z.lz4f_is_error(v) else 0)
+                if not Z.lz4f_is_error(v):
+                    self.assertEqual(error_name(v), b"Unspecified error code")
+        small = ctypes.create_string_buffer(4)
+        enc, dec = self.z.frame_encoder(Z.prefs(self.z.Prefs)), self.z.frame_decoder()
+        try:
+            begin = self.fn(PF + "CompressBegin")
+            real = [("a NULL context", begin(None, small, 4, None), 1, b"ERROR_GENERIC"),
+                    ("4 bytes for a frame header", begin(ctypes.byref(enc.ctx), small, 4, None), 11,
+                     b"ERROR_dstMaxSize_tooSmall"),
+                    ("no frame magic", dec.decode(b"not an LZ4 frame")[1], 13, b"ERROR_frameType_unknown")]
+        finally:
+            enc.close()
+            dec.close()
+        for what, r, code, name in real:
+            with self.subTest(what):
+                self.assertTrue(is_error(r))
+                self.assertEqual((error_code(r), error_name(r)), (code, name))

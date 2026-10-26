@@ -1,7 +1,7 @@
 """Fast-LZMA2 1.0.1 (FL2_*): the one-shot and streaming encoder and decoder, which GrindCore exports unchanged.
 
 GrindCore vendors fast-lzma2 through mcmilk's 7-Zip-zstd; every file it keeps is byte-identical to the official
-v1.0.1 release apart from line endings (other-codecs.md 4.4.1). There is no PAL: the 61 exports are the library's own
+v1.0.1 release apart from line endings (other-codecs.md 4.4.1). There is no PAL: the 64 exports are the library's own
 functions. The references, from $GC_REF_FL2 (ref/build_fl2_ref.py):
   - official 1.0.1, the same C sources: GrindCore's output must match it byte for byte for the same calls;
   - official master (967306d3), 1.0.1 plus upstream's two later encoder fixes.
@@ -763,6 +763,36 @@ class Fl2Tests(unittest.TestCase):
         self.assertEqual(self.z.call("FL2_getDictSizeFromProp", 40), F.SIZE_MAX)
         for p in (41, 63, 255):
             self.assertEqual(F.error_of(self.z.call("FL2_getDictSizeFromProp", p)), F.CORRUPTION_DETECTED)
+
+    def test_error_helpers(self):
+        """FL2_isError, FL2_isTimedOut and FL2_getErrorName, exported on audit/native-fixes (absent from the shipped
+        binaries, where this skips). The library's own test of a size_t result, on both sides of the threshold for this
+        RID's size_t: GrindCore.net's managed IsError puts it at 0xFFFFFFEC on 64-bit too, where 0xFFFFFFED is a size
+        (other-codecs.md 4.4.1 W26). FL2_isError is also true for the timeout code, which only FL2_isTimedOut tells
+        apart. Then real failures by name; official 1.0.1 gives the same answers where it's present."""
+        for name in ("FL2_isError", "FL2_isTimedOut", "FL2_getErrorName"):
+            if not self.L.has(name):
+                self.skipTest("%s not exported by this library (exported on audit/native-fixes)" % name)
+        apis = [self.z] + ([self.ref] if self.ref else [])
+        neg = lambda e: F.SIZE_MAX + 1 - e                          # (size_t)-e, how FL2 returns error e
+        for v in (0, 1, 4096, F.SIZE_MAX >> 1, 0xFFFFFFEC & F.SIZE_MAX, 0xFFFFFFED & F.SIZE_MAX, neg(F.MAX_CODE + 1),
+                  neg(F.MAX_CODE), neg(F.MAX_CODE - 1), neg(F.TIMED_OUT), neg(F.GENERIC), F.SIZE_MAX):
+            with self.subTest(value=hex(v)):
+                for api in apis:
+                    self.assertEqual(bool(api.call("FL2_isError", v)), F.is_error(v), api.label)
+                    self.assertEqual(bool(api.call("FL2_isTimedOut", v)), v == neg(F.TIMED_OUT), api.label)
+                    self.assertEqual(api.call("FL2_getErrorName", v), apis[0].call("FL2_getErrorName", v), api.label)
+                if not F.is_error(v):
+                    self.assertEqual(self.z.call("FL2_getErrorName", v), b"No error detected")
+        p = self.L.struct.FL2_compressionParameters()
+        src, dst = F._In(self.z.compress(b"grindcore " * 1000)), ctypes.create_string_buffer(100)
+        real = [(self.z.call("FL2_getLevelParameters", 11, 0, ctypes.addressof(p)), b"Parameter is out of bound"),
+                (self.z.call("FL2_decompress", dst, 100, src.addr, src.n), b"Destination buffer is too small"),
+                (neg(F.TIMED_OUT), b"Wait timed out. Timeouts should be handled before errors using FL2_isTimedOut()")]
+        for r, name in real:
+            with self.subTest(name):
+                self.assertTrue(self.z.call("FL2_isError", r))
+                self.assertEqual(self.z.call("FL2_getErrorName", r), name)
 
     def test_memory_estimates(self):
         """The estimates are consistent: a CStream is its CCtx plus the dictionary (twice when double-buffered);

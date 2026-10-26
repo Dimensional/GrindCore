@@ -193,4 +193,12 @@ FUNCTIONEXPORT size_t FUNCTIONCALLINGCONVENCTION SZ_Lz4F_v1_10_0_GetFrameInfo(SZ
 FUNCTIONEXPORT size_t FUNCTIONCALLINGCONVENCTION SZ_Lz4F_v1_10_0_Decompress(SZ_Lz4F_v1_10_0_DecompressionContext* ctx, void* dstBuffer, size_t* dstSizePtr, const void* srcBuffer, size_t* srcSizePtr, const LZ4F_decompressOptions_t* dOptPtr);
 FUNCTIONEXPORT void FUNCTIONCALLINGCONVENCTION SZ_Lz4F_v1_10_0_ResetDecompressionContext(SZ_Lz4F_v1_10_0_DecompressionContext* ctx);
 
+// Error Handling, for the size_t results above: LZ4F's own errors, and the PAL's argument error
+// (SZ_Lz4_v1_10_0_ERROR as size_t), which LZ4F reads as ERROR_GENERIC. A signed cast can't tell them from a size where
+// size_t is 32-bit (audit/abi-verification.md 4.6).
+FUNCTIONEXPORT unsigned FUNCTIONCALLINGCONVENCTION SZ_Lz4F_v1_10_0_IsError(size_t result);
+FUNCTIONEXPORT const char* FUNCTIONCALLINGCONVENCTION SZ_Lz4F_v1_10_0_GetErrorName(size_t result);
+/* LZ4F's LZ4F_errorCodes for a result: 0 if it isn't an error, else e.g. 1 ERROR_GENERIC, 11 ERROR_dstMaxSize_tooSmall */
+FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_Lz4F_v1_10_0_GetErrorCode(size_t result);
+
 #endif // SZ_Lz4_v1_10_0_H

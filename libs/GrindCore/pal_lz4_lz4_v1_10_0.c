@@ -1,3 +1,4 @@
+#define LZ4F_STATIC_LINKING_ONLY  // LZ4F_getErrorCode; LZ4 is linked in statically, so its static-only API is safe
 #include "pal_lz4_lz4_v1_10_0.h"
 #include <stdlib.h>
 #include <string.h>
@@ -365,4 +366,20 @@ FUNCTIONEXPORT void FUNCTIONCALLINGCONVENCTION SZ_Lz4F_v1_10_0_ResetDecompressio
 {
     if (ctx == NULL || ctx->internalState == NULL) return;
     LZ4F_resetDecompressionContext((LZ4F_dctx*)ctx->internalState);
+}
+
+/* Error Handling */
+FUNCTIONEXPORT unsigned FUNCTIONCALLINGCONVENCTION SZ_Lz4F_v1_10_0_IsError(size_t result)
+{
+    return LZ4F_isError(result);
+}
+
+FUNCTIONEXPORT const char* FUNCTIONCALLINGCONVENCTION SZ_Lz4F_v1_10_0_GetErrorName(size_t result)
+{
+    return LZ4F_getErrorName(result);
+}
+
+FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION SZ_Lz4F_v1_10_0_GetErrorCode(size_t result)
+{
+    return (int32_t)LZ4F_getErrorCode(result);
 }

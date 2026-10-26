@@ -31,6 +31,16 @@ OVERRIDES = {
     # read back is whatever the register held, so tests must not trust it there.
     "SZ_SHA3_Init": ("i32", ["ptr", "u32"]),
     "SZ_Sha1_PrepareBlock": ("i32", ["ptr", "ptr", "u32"]),
+    # audit/native-fixes: the error helpers (abi-verification.md 4.6): zstd's error code, LZ4F's classifier, name and
+    # code, and fast-lzma2's own three, which were compiled in but not in entrypoints.c
+    "SZ_ZStd_v1_5_2_GetErrorCode": ("i32", ["size"]),
+    "SZ_ZStd_v1_5_7_GetErrorCode": ("i32", ["size"]),
+    "SZ_Lz4F_v1_10_0_IsError": ("u32", ["size"]),
+    "SZ_Lz4F_v1_10_0_GetErrorName": ("cstr", ["size"]),
+    "SZ_Lz4F_v1_10_0_GetErrorCode": ("i32", ["size"]),
+    "FL2_isError": ("u32", ["size"]),
+    "FL2_isTimedOut": ("u32", ["size"]),
+    "FL2_getErrorName": ("cstr", ["size"]),
 }
 EXPORTS = dict(_spec.EXPORTS)
 EXPORTS.update(OVERRIDES)
