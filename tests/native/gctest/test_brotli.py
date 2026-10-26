@@ -2,7 +2,8 @@
 
 GrindCore vendors official Brotli 1.1.0 with one upstream patch (.NET's google/brotli@85d88cbf, casts for an MSVC
 warning): c/common, c/dec, c/enc and c/include are byte-identical to tag v1.1.0 plus that patch (other-codecs.md
-4.3.1). The PAL is twelve pass-throughs. The references, from $GC_REF_BROTLI (ref/build_brotli_ref.py):
+4.3.1), except for two audit changes: enc/encode.c's out-of-memory checks (finding 1), and v1.1.1's decoder fix for
+CVE-2026-111497 in dec/decode.c and include/brotli/decode.h (finding 5). The PAL is twelve pass-throughs. The references, from $GC_REF_BROTLI (ref/build_brotli_ref.py):
   - Brotli's own test fixtures (tests/testdata at the tag, each checked against its git blob hash): streams made by
     upstream, decoded here on every platform, Windows included;
   - official Brotli built unmodified from the tag's archive. GrindCore's output must match it byte for byte for the

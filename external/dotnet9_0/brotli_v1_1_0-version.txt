@@ -7,3 +7,9 @@ Apply https://github.com/google/brotli/commit/85d88cbfc2b742e0742286ec277b73bdbf
 
 GrindCore (audit/native-fixes): brotli_v1_1_0.cmake defines BROTLI_ENCODER_CLEANUP_ON_OOM, and enc/encode.c adds
 the out-of-memory checks that mode lacked (each marked [audit fix, audit/other-codecs.md 4.3.1]).
+
+GrindCore (audit/native-fixes): the decoder fix for CVE-2026-111497 (an out-of-bounds write) from upstream v1.1.1,
+applied as upstream's own v1.1.0...v1.1.1 diff of dec/decode.c and include/brotli/decode.h. dec/decode.c is now
+v1.1.1's plus the patch above; include/brotli/decode.h is v1.1.1's (error code -17,
+BROTLI_DECODER_ERROR_FORMAT_BLOCK_SWITCH). common/version.h still says 1.1.0, and the encoder is 1.1.0's
+(audit/other-codecs.md 4.3.1 finding 5).
