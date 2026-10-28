@@ -116,6 +116,16 @@ static z_stream* GetCurrentZStream(PAL_ZStream* stream)
     return zStream;
 }
 
+/*
+[audit fix, audit/memory.md M10] Whether Init created the z_stream. When its calloc fails there is none, and
+GrindCore.net still calls DeflateEnd/InflateEnd on the stream when its handle is released; GetCurrentZStream would
+write through NULL. The calls below return PAL_Z_STREAMERROR instead, as zlib's own functions do for a NULL stream.
+*/
+static int HasZStream(const PAL_ZStream* stream)
+{
+    return stream != NULL && stream->internalState != NULL;
+}
+
 FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION DN9_ZLibNg_v2_2_1_DeflateInit2_(
     PAL_ZStream* stream, int32_t level, int32_t method, int32_t windowBits, int32_t memLevel, int32_t strategy)
 {
@@ -135,6 +145,8 @@ FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION DN9_ZLibNg_v2_2_1_DeflateInit2
 FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION DN9_ZLibNg_v2_2_1_Deflate(PAL_ZStream* stream, int32_t flush)
 {
     assert(stream != NULL);
+    if (!HasZStream(stream))
+        return PAL_Z_STREAMERROR;
 
     z_stream* zStream = GetCurrentZStream(stream);
     int32_t result = Z_v2_2_1_deflate(zStream, flush);
@@ -146,6 +158,8 @@ FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION DN9_ZLibNg_v2_2_1_Deflate(PAL_
 FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION DN9_ZLibNg_v2_2_1_DeflateEnd(PAL_ZStream* stream)
 {
     assert(stream != NULL);
+    if (!HasZStream(stream))
+        return PAL_Z_STREAMERROR;
 
     z_stream* zStream = GetCurrentZStream(stream);
     int32_t result = Z_v2_2_1_deflateEnd(zStream);
@@ -172,6 +186,8 @@ FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION DN9_ZLibNg_v2_2_1_InflateInit2
 FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION DN9_ZLibNg_v2_2_1_Inflate(PAL_ZStream* stream, int32_t flush)
 {
     assert(stream != NULL);
+    if (!HasZStream(stream))
+        return PAL_Z_STREAMERROR;
 
     z_stream* zStream = GetCurrentZStream(stream);
     int32_t result = Z_v2_2_1_inflate(zStream, flush);
@@ -183,6 +199,8 @@ FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION DN9_ZLibNg_v2_2_1_Inflate(PAL_
 FUNCTIONEXPORT int32_t FUNCTIONCALLINGCONVENCTION DN9_ZLibNg_v2_2_1_InflateEnd(PAL_ZStream* stream)
 {
     assert(stream != NULL);
+    if (!HasZStream(stream))
+        return PAL_Z_STREAMERROR;
 
     z_stream* zStream = GetCurrentZStream(stream);
     int32_t result = Z_v2_2_1_inflateEnd(zStream);

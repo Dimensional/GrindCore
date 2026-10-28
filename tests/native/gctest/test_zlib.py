@@ -474,6 +474,22 @@ class _ZlibTests(object):
         rc, out, used = self.z.uncompress(zlib.compress(b"abc"), 10, 7, "3")
         self.assertEqual(rc, Z_STREAM_ERROR, "Uncompress3 windowBits 7")
 
+    def test_calls_without_a_z_stream_return_an_error(self):
+        """When Init's calloc fails, the stream has no z_stream (internalState NULL), and GrindCore.net still calls
+        DeflateEnd/InflateEnd on it when its handle is released (memory.md M10). A zeroed stream is that state. Every
+        call must return Z_STREAM_ERROR, as zlib's own do for a NULL stream, and leave it as it was. Libraries without
+        the fix write through NULL, so the calls run in a child process."""
+        rc, out, err = child("""
+            s = L.struct.PAL_ZStream()
+            calls = (("Deflate", (4,)), ("DeflateEnd", ()), ("Inflate", (0,)), ("InflateEnd", ()))
+            print(" ".join(str(getattr(L, "%s" + n)(ctypes.byref(s), *a)) for n, a in calls), 1 if s.internalState else 0)
+        """ % self.PREFIX)
+        if rc != 0:
+            known(self, "zlib-null-z-stream")
+        got = [int(x) for x in out.split()]
+        self.assertEqual(got, [Z_STREAM_ERROR] * 4 + [0], "%s: Deflate, DeflateEnd, Inflate, InflateEnd on a stream "
+                         "without a z_stream, then whether one appeared" % self.z.name)
+
     # --- one-shot wrappers and Nanook's compress3/uncompress3 -------------------------------------------------------
 
     def test_one_shot_compress_equals_the_stream(self):

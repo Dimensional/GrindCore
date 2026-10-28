@@ -73,6 +73,10 @@ KNOWN_DEFECTS = {
     "zlib-crc32-negative-length": "the PAL's DN8_/DN9_..._Crc32 pass their int32_t length to zlib's unsigned uInt, so "
                                   "a negative length reads up to 4 GiB past the buffer: a crash; fixed in the PAL on "
                                   "audit/native-fixes (a negative length is no data); audit/build-exam.md W1",
+    "zlib-null-z-stream": "the zlib PALs' Deflate, DeflateEnd, Inflate and InflateEnd write through a NULL z_stream, "
+                          "which Init leaves when its calloc fails, and GrindCore.net's handle calls DeflateEnd or "
+                          "InflateEnd on it when released: a crash instead of the out-of-memory exception; fixed in "
+                          "the PAL on audit/native-fixes; audit/memory.md M10",
     "zlibng-arm32-neon-align": "zlib-ng's NEON Adler-32 uses :256-aligned loads (clang 14-19 on 32-bit ARM) on data "
                                "aligned to 16: SIGBUS on every call; fixed by the zlib-ng_arm32_neon_ld4.h header on "
                                "audit/native-fixes; audit/platforms.md 10.7",
