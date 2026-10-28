@@ -167,6 +167,9 @@ Every RID has all of them (2026-10-17). `--refs` sets the variables; each can al
   GrindCore.build's `init-compiler.sh` does: the newest `clang-N`.
 - **linux-x86:** build the references with `--cflags="-msse2 -mfpmath=sse"`, as GrindCore.build builds linux-x86.
   x87 references differ in Brotli Q10/11 and zstd 1.5.2 L5/L9.
+- **linux-arm:** `build_zlib_ref.py` builds the official zlib-ng with gcc there. Built with clang (14 through 19
+  measured), the release faults on 32-byte-aligned NEON loads in its Adler-32, which GrindCore's own build avoids
+  with `external/dotnet9_0/zlib-ng_arm32_neon_ld4.h`. The compiler doesn't change what deflate writes.
 - **Legacy (CentOS 7):** every reference builds in the legacy images (references built elsewhere need a newer glibc).
   Brotli's, Fast-LZMA2's and zlib's use the images' clang 7.0.1 (`/opt/rh/llvm-toolset-7.0`), which builds GrindCore
   there. For 7-Zip's on the arm64 one, pass `--cc /opt/rh/devtoolset-8/root/usr/bin/gcc`: CentOS's gcc 4.8.5 can't

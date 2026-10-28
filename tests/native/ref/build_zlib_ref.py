@@ -8,7 +8,7 @@ Nanook's compress3/uncompress3 added (audit/other-codecs.md 4.2.1). The referenc
                  CMake with the options GrindCore's wrapper sets (external/dotnet9_0/zlib-ng_v2_2_1.cmake):
                  ZLIB_COMPAT=ON, WITH_ARMV6=OFF, WITH_RVV=OFF. zlib-ng's probes then pick the same CPU-specific code
                  as in GrindCore's build. It needs cmake, and Ninja on Windows (Visual Studio's, found by vcvarsall).
-                 On 32-bit ARM it's built with gcc: the release built with clang <= 16 crashes there (SIGBUS in its
+                 On 32-bit ARM it's built with gcc: the release built with clang 14-19 crashes there (SIGBUS in its
                  NEON Adler-32, audit/platforms.md 10.7), which GrindCore's own build works around.
 Unix, macOS, and Windows with MSVC (msvc.py: --arch x64/x86/arm64, default this machine's); stdlib only, Python 3.6+.
 Off Windows the libraries are linked -Bsymbolic, so their calls into themselves can't bind to another zlib already in
@@ -120,6 +120,9 @@ def build_zlib(a, src):
 def build_zlib_ng(a, src):
     lib = os.path.join(a.out, "libzlibngref-2.2.1" + ext())
     b = lib + ".work"
+    # Start clean: CMake keeps the compiler of a cache it finds, so a changed --cc (or the 32-bit ARM switch to gcc
+    # below) wouldn't take effect, and a clang build left there would be copied out again.
+    shutil.rmtree(b, ignore_errors=True)
     flags = shlex.split(a.cflags)
     osx_arch = None
     if "-arch" in flags:    # macOS: CMake takes the architecture on its own, or it adds the host's -arch as well
@@ -136,10 +139,14 @@ def build_zlib_ng(a, src):
         built = glob.glob(os.path.join(b, "*.dll"))
     else:
         cc = a.cc
-        if platform.machine().lower().startswith("arm") and struct.calcsize("P") == 4 and "clang" in cc:
-            # 32-bit ARM: clang <= 16 gives zlib-ng's NEON Adler-32 32-byte-aligned loads on 16-byte-aligned data, a
-            # SIGBUS (audit/platforms.md 10.7; GrindCore's build includes zlib-ng_arm32_neon_ld4.h against it). gcc
-            # doesn't, so the release builds unmodified; the compiler doesn't change what deflate writes.
+        # A 32-bit ARM process: machine() is the kernel's, so under a 64-bit kernel (the Pi's arm/v7 containers) it says
+        # aarch64; only the pointer size tells. That case was missed, and a clang 19 reference faulted there.
+        arm32 = struct.calcsize("P") == 4 and platform.machine().lower().startswith(("arm", "aarch64"))
+        if arm32 and "clang" in cc:
+            # 32-bit ARM: clang (14 through 19 measured) gives zlib-ng's NEON Adler-32 32-byte-aligned loads on
+            # 16-byte-aligned data, a SIGBUS (audit/platforms.md 10.7; GrindCore's build includes
+            # zlib-ng_arm32_neon_ld4.h against it). gcc doesn't, so the release builds unmodified; the compiler doesn't
+            # change what deflate writes.
             cc = shutil.which("gcc") or cc
             print("zlib-ng on 32-bit ARM: %s instead of %s" % (cc, a.cc))
         opts += ["-DCMAKE_C_COMPILER=" + cc, "-DCMAKE_C_FLAGS=" + " ".join(flags)]

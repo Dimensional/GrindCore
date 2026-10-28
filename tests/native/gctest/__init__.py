@@ -73,7 +73,7 @@ KNOWN_DEFECTS = {
     "zlib-crc32-negative-length": "the PAL's DN8_/DN9_..._Crc32 pass their int32_t length to zlib's unsigned uInt, so "
                                   "a negative length reads up to 4 GiB past the buffer: a crash; fixed in the PAL on "
                                   "audit/native-fixes (a negative length is no data); audit/build-exam.md W1",
-    "zlibng-arm32-neon-align": "zlib-ng's NEON Adler-32 uses :256-aligned loads (clang <= 16 on 32-bit ARM) on data "
+    "zlibng-arm32-neon-align": "zlib-ng's NEON Adler-32 uses :256-aligned loads (clang 14-19 on 32-bit ARM) on data "
                                "aligned to 16: SIGBUS on every call; fixed by the zlib-ng_arm32_neon_ld4.h header on "
                                "audit/native-fixes; audit/platforms.md 10.7",
     "lzma2-flush-data-loss": "the multi-call LZMA2 encoder (Lzma2Stream's solid mode) latches the end of its input when "
