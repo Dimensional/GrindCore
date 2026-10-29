@@ -171,9 +171,11 @@ Every RID has all of them (2026-10-17). `--refs` sets the variables; each can al
   measured), the release faults on 32-byte-aligned NEON loads in its Adler-32, which GrindCore's own build avoids
   with `external/dotnet9_0/zlib-ng_arm32_neon_ld4.h`. The compiler doesn't change what deflate writes.
 - **Legacy (CentOS 7):** every reference builds in the legacy images (references built elsewhere need a newer glibc).
-  Brotli's, Fast-LZMA2's and zlib's use the images' clang 7.0.1 (`/opt/rh/llvm-toolset-7.0`), which builds GrindCore
-  there. For 7-Zip's on the arm64 one, pass `--cc /opt/rh/devtoolset-8/root/usr/bin/gcc`: CentOS's gcc 4.8.5 can't
-  compile 7-Zip's `CpuArch.c`, and devtoolset-11 is empty.
+  Brotli's, Fast-LZMA2's, zlib's and zstd's use the images' clang 7.0.1 (`/opt/rh/llvm-toolset-7.0`), which builds
+  GrindCore there. zstd's needs it on the arm64 one: CentOS's gcc 4.8.5 doesn't define `__ARM_NEON`, so zstd 1.5.2
+  would take its scalar row matcher, whose level-5 and level-9 output differs. For 7-Zip's on the arm64 one, pass
+  `--cc /opt/rh/devtoolset-8/root/usr/bin/gcc`: gcc 4.8.5 can't compile 7-Zip's `CpuArch.c`, and devtoolset-11 is
+  empty.
 - **Windows:** every builder uses MSVC through vswhere (`ref/msvc.py`; `--arch x64/x86/arm64`, cross-compiling arm64 on
   an x64 host, as GrindCore's win-arm64 build is). DLLs export, through a `.def`, exactly the functions the tests bind
   (`REF_FUNCTIONS` in `gctest/zstd_util.py`, `lz4_util.py`, `brotli_util.py` and `test_zlib.py`); Fast-LZMA2's header

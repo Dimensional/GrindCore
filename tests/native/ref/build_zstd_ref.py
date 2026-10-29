@@ -2,10 +2,16 @@
 versions GrindCore vendors, 1.5.2 and 1.5.7) as small shared libraries: the references for gctest/test_zstd.py.
 
 The tarball comes from github.com/facebook/zstd's release page and is checked against the SHA-256 file published
-beside it. lib/common, lib/compress, lib/decompress and contrib/seekable_format/zstdseek_*.c are compiled unmodified
-with the system C compiler, with the multithreading and namespace settings of zstd's own lib/Makefile. The assembly
-Huffman decoder is left out (ZSTD_DISABLE_ASM, as GrindCore builds it); it changes speed, never output. Unix, macOS,
-and Windows with MSVC (msvc.py: --arch x64/x86/arm64, default this machine's); stdlib only, Python 3.6+.
+beside it. lib/common, lib/compress, lib/decompress and contrib/seekable_format/zstdseek_*.c are compiled unmodified,
+with the multithreading and namespace settings of zstd's own lib/Makefile. The assembly Huffman decoder is left out
+(ZSTD_DISABLE_ASM, as GrindCore builds it); it changes speed, never output. Unix, macOS, and Windows with MSVC
+(msvc.py: --arch x64/x86/arm64, default this machine's); stdlib only, Python 3.6+.
+
+The compiler defaults to the one GrindCore.build picks (eng/common/native/init-compiler.sh): $CC if set, else the
+highest-numbered clang-N on PATH, else clang, else cc. It matters for 1.5.2 on ARM: its row match finder uses NEON only
+if the compiler defines __ARM_NEON, and its scalar fallback finds different matches at levels 5 and 9
+(audit/architecture-limitations.md AL6). The linux-arm64-legacy image's cc, CentOS 7's gcc 4.8.5, doesn't define it;
+its clang 7.0.1, which builds GrindCore there, does (found by the clean-clone check, 2026-10-29).
 
   python3 build_zstd_ref.py [--version 1.5.7 ...] [--out DIR] [--cc cc] [--cflags "..."] [--tarballs DIR] [--arch A]
   -> DIR/libzstdref-<version>.so (.dylib on macOS, .dll on Windows). Point GC_REF_ZSTD at DIR and run:
@@ -21,6 +27,7 @@ import glob
 import hashlib
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -50,6 +57,17 @@ def fetch(version, out, tarballs):
     return path
 
 
+def default_cc():
+    """init-compiler.sh's choice: $CC, then the newest clang-N (or clangN) from 30 down to 8, then clang, then cc."""
+    if os.environ.get("CC"):
+        return os.environ["CC"]
+    for n in range(30, 7, -1):
+        for name in ("clang-%d" % n, "clang%d" % n):
+            if shutil.which(name):
+                return name
+    return "clang" if shutil.which("clang") else "cc"
+
+
 def build_windows(a, version, sources, includes, dll):
     sys.path.insert(0, os.path.dirname(HERE))       # tests/native, for gctest's list of the functions the tests bind
     from gctest.zstd_util import REF_FUNCTIONS
@@ -70,7 +88,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--version", action="append", help="repeatable; default 1.5.2 and 1.5.7")
     ap.add_argument("--out", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "out"))
-    ap.add_argument("--cc", default=os.environ.get("CC", "cc"))
+    ap.add_argument("--cc", default=default_cc(), help="default: as GrindCore.build picks it (see above)")
     ap.add_argument("--cflags", default="", help='extra compiler flags, e.g. "-arch x86_64" or "-m32"')
     ap.add_argument("--tarballs", help="a folder that may already hold zstd-<version>.tar.gz")
     ap.add_argument("--arch", choices=("x64", "x86", "arm64"), help="Windows: the target (default: this machine)")
